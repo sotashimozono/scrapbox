@@ -1,0 +1,19 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock
+
+# Paper and Report Data (LEAK PREVENTION)
+*.pdf
+*.html
+*.css
+*.js
+*.json
+!**/Cargo.toml
+!**/vectors.json # if any non-sensitive test fixtures are needed
+
+# IDEs & System
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
