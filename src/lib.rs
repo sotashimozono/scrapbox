@@ -1,40 +1,44 @@
 //! # scrapbox
 //!
-//! A generic matrix relaxation solver and iterative fixed-point solver.
+//! Reference implementation of **canonical-ensemble finite-temperature density
+//! functional theory** for lattice fermion systems (1D Hubbard family in
+//! v0.1), with quantum-thermodynamics observables of sudden quenches.
+//!
+//! The library is driven end-to-end by a single `config.toml`; see
+//! [`config`] and the project's `notes/discipline/CONFIG.md` for the schema.
+//!
+//! ## Layers
+//!
+//! | Layer | Module | Concept |
+//! |---|---|---|
+//! | 0 — Inputs | [`hamiltonian`] | `KohnShamHamiltonian` and lattice models |
+//! | 1 — XC | [`xc`] | `ExchangeCorrelation` |
+//! | 3 — Spectrum | [`spectrum`] | Eigendecomposition of `H^KS` |
+//! | 4 — Density | [`density`] | `CanonicalDensityEvaluator` (Pratt recursion) |
+//! | 5 — SCF | [`scf`] | `CanonicalThermalDFTSolver` |
+//! | 6 — Observables | [`observables`] | Mean work, irreversible entropy, ... |
+//!
+//! Layer 2 (KS Hamiltonian assembly) lives inside [`hamiltonian`].
+//!
+//! ## Naming
+//!
+//! Per `notes/discipline/CONVENTIONS.md`, names follow the physics literally:
+//! `KohnShamHamiltonian`, `PrattRecursion`, `SuddenQuenchEvaluator`. No
+//! mathematical camouflage.
 
-pub mod solvers;
-pub mod utils;
+#![warn(missing_docs)]
+#![deny(unsafe_code)]
 
-pub use solvers::{relaxation::RelaxationSolver, fixed_point::FixedPointSolver};
+pub mod config;
+pub mod density;
+pub mod error;
+pub mod hamiltonian;
+pub mod observables;
+pub mod output;
+pub mod quench;
+pub mod scf;
+pub mod spectrum;
+pub mod validation;
+pub mod xc;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use faer::Mat;
-
-    #[test]
-    fn test_relaxation_propagation() {
-        // Simple diagonal system matrix (H = Identity)
-        let matrix = Mat::<f64>::from_fn(2, 2, |i, j| if i == j { 1.0 } else { 0.0 });
-        let solver = RelaxationSolver::new(matrix);
-
-        let mut state = Mat::<f64>::from_fn(2, 1, |_, _| 1.0);
-        solver.propagate(&mut state, 1, 0.1);
-
-        // state = state - dt * H * state = 1.0 - 0.1 * 1.0 = 0.9
-        assert!((state[(0, 0)] - 0.9).abs() < 1e-9);
-        assert!((state[(1, 0)] - 0.9).abs() < 1e-9);
-    }
-
-    #[test]
-    fn test_fixed_point_solver() {
-        let solver = FixedPointSolver::new(1e-5, 100);
-        let initial = Mat::<f64>::from_fn(2, 2, |_, _| 0.0);
-        
-        let result = solver.solve(&initial).unwrap();
-        // Should converge towards the Identity matrix
-        assert!((result[(0, 0)] - 1.0).abs() < 1e-4);
-        assert!((result[(0, 1)] - 0.0).abs() < 1e-4);
-        assert!((result[(1, 1)] - 1.0).abs() < 1e-4);
-    }
-}
+pub use crate::error::{Result, ScrapboxError};

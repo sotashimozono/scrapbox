@@ -1,0 +1,31 @@
+# Project allowlist for physics nomenclature and proper names.
+# Anything case-insensitive matching here is excused from typo detection.
+
+[default.extend-words]
+# Identifiers we use in src/ and notes/ that look like typos but are not.
+mul = 'mul'   # used in mul_add / linear-algebra identifiers
+nd   = 'nd'   # ndarray / nd-matrix prefixes
+
+[default.extend-identifiers]
+# Author / scientist surnames that appear throughout the corpus.
+Hohenberg     = 'Hohenberg'
+Mermin        = 'Mermin'
+Sugiura       = 'Sugiura'
+Shimizu       = 'Shimizu'
+Palamara      = 'Palamara'
+Pratt         = 'Pratt'
+Borrmann      = 'Borrmann'
+Capelle       = 'Capelle'
+Zawadzki      = 'Zawadzki'
+Skelt         = 'Skelt'
+Karasiev      = 'Karasiev'
+Lima          = 'Lima'
+Hubbard       = 'Hubbard'
+Bethe         = 'Bethe'
+Heisenberg    = 'Heisenberg'
+Hellmann      = 'Hellmann'
+Feynman       = 'Feynman'
+Jarzynski     = 'Jarzynski'
+Mott          = 'Mott'
+Pulay         = 'Pulay'
+faer          = 'faer'   # the linalg crate name

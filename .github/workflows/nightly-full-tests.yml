@@ -1,0 +1,54 @@
+name: nightly-full-tests
+
+# Expensive tier — runs on daily cron and workflow_dispatch only. Never on
+# push or PR, so PR turnaround stays fast. The crate looks at the
+# `SCRAPBOX_TEST_FULL` env var to enable benchmarks-grade tests (full
+# Zawadzki sweep, larger L, longer SCF tolerance, etc.).
+#
+# Mirrors QAtlas.jl's NightlyFullTests pattern.
+
+on:
+  schedule:
+    - cron: "0 18 * * *"   # 18:00 UTC ≈ 03:00 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-full-tests
+  cancel-in-progress: false
+
+jobs:
+  full-tests:
+    name: SCRAPBOX_TEST_FULL=1 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      SCRAPBOX_TEST_FULL: "1"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+      - name: Run full test suite (incl. nightly-only fixtures)
+        run: cargo test --release --workspace --all-features -- --include-ignored
+      - name: Reproduction benchmarks
+        run: |
+          set -euo pipefail
+          if [ -d configs ]; then
+            for cfg in configs/nightly_*.toml; do
+              [ -f "$cfg" ] || continue
+              echo "::group::scrapbox validate $cfg"
+              cargo run --release --bin scrapbox -- validate "$cfg"
+              echo "::endgroup::"
+            done
+          else
+            echo "configs/ does not exist yet — skipping reproduction phase."
+          fi

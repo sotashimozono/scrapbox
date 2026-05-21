@@ -1,0 +1,48 @@
+schema_version = "0.1"
+
+[meta]
+name = "dimer_smoke"
+description = "Hubbard dimer, U=4J, beta=2/J — smallest config that exercises the v0.1 surface."
+created = "2026-05-21"
+tags = ["smoke", "v0.1"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 2
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 1
+beta = 2.0
+external_potential.kind = "uniform"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "hubbard_lda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 200
+tolerance = 1e-10
+mixing.kind = "linear"
+mixing.alpha = 0.5
+initial_density.kind = "uniform"
+
+[observables]
+mean_work = false
+irreversible_entropy = false
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/dimer_smoke"
+format = "json"
+dump_density = true
+dump_spectrum = true
+dump_partition_function = true
+overwrite = false

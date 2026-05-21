@@ -1,0 +1,11 @@
+{
+  "schema_version": "0.1",
+  "produced_by": "scrapbox_v0.1_self_reference",
+  "observables": {
+    "free_energy": -2.0181499279178107,
+    "partition_function": 56.61646567203299,
+    "mean_work": null,
+    "irreversible_entropy": null
+  },
+  "site_density": [1.0, 1.0]
+}

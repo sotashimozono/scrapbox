@@ -1,0 +1,28 @@
+name: typos
+
+# Lightweight typo check across the repo, including notes/ markdown.
+# Uses the `crate-ci/typos` action which has its own SHA-pinned release.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: typos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  typos:
+    name: typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: crate-ci/typos@392b78fe18a52790c53f42456e46124f77346842   # v1.30.2
+        with:
+          # Project-specific allowlist (physics terms, names, etc.) lives
+          # in .typos.toml at repo root once needed.
+          config: ./.typos.toml

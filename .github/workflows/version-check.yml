@@ -1,0 +1,83 @@
+name: version-check
+
+# Advisory (non-blocking) consistency check between:
+#   1. `[package].version` in Cargo.toml
+#   2. The latest CHANGELOG.md heading (when CHANGELOG exists)
+#   3. The `schema_version` in discipline/CONFIG.md examples
+#
+# Red here means a release would not cleanly cut. Reading the result is a
+# pre-tag visibility tool — it never tags, publishes, or blocks.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: version-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-check:
+    name: version-check (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Extract Cargo.toml version
+        id: cargo
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="$(awk '
+            /^\[package\]/ { inpkg = 1; next }
+            /^\[/ { inpkg = 0 }
+            inpkg && /^[[:space:]]*version[[:space:]]*=/ {
+              gsub(/.*=[[:space:]]*"|".*/, "")
+              print
+              exit
+            }' Cargo.toml)"
+          if [ -z "$V" ]; then
+            echo "::error::could not read [package].version from Cargo.toml"
+            exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Cargo.toml version: $V"
+
+      - name: Verify CHANGELOG entry (when present)
+        shell: bash
+        run: |
+          set -euo pipefail
+          V="${{ steps.cargo.outputs.version }}"
+          if [ ! -f CHANGELOG.md ]; then
+            echo "CHANGELOG.md not present yet — skipping (advisory)."
+            exit 0
+          fi
+          if ! grep -qE "^## \[?$V\]?" CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md has no '## $V' (or '## [$V]') heading"
+            echo "Releasing v$V would leave the CHANGELOG behind. Advisory only."
+          else
+            echo "OK — CHANGELOG.md contains a heading for v$V"
+          fi
+
+      - name: Verify schema_version sync across CONFIG.md examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f notes/discipline/CONFIG.md ]; then
+            echo "discipline/CONFIG.md not present — skipping"
+            exit 0
+          fi
+          mapfile -t versions < <(grep -E '^schema_version\s*=' notes/discipline/CONFIG.md \
+                                  | sed -E 's/.*"([^"]+)".*/\1/' | sort -u)
+          if [ "${#versions[@]}" -le 1 ]; then
+            echo "OK — CONFIG.md uses a single schema_version: ${versions[*]:-<none>}"
+          else
+            echo "::warning::CONFIG.md mixes schema_version values: ${versions[*]}"
+            echo "Pick one and update examples in discipline/CONFIG.md."
+          fi

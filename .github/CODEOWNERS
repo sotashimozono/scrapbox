@@ -1,0 +1,9 @@
+# Default owner for everything in the repo.
+# A PR cannot merge without a review approval from an owner of every touched path.
+*                       @sotashimozono
+
+# Discipline layer changes are doctrine — require explicit acknowledgement.
+/notes/discipline/      @sotashimozono
+/.github/               @sotashimozono
+/Cargo.toml             @sotashimozono
+/Cargo.lock             @sotashimozono
