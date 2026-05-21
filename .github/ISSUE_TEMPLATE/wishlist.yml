@@ -1,0 +1,39 @@
+name: 💭 開発アイデア (Wish List)
+description: 将来実装したい機能や数理ソルバーのアイデア
+title: "[Wish]: "
+labels: ["wishlist", "future"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        将来的に実装したい機能のアイデアを記録します。自由な発想で記述してください！
+        ※記述の際は、機密性の高い物理用語を一般的な数学表現に置き換えてください。
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: アイデアの概要
+      description: どのような機能を実装したいですか？
+      placeholder: アイデアを自由に記述してください
+    validations:
+      required: true
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 優先度（自己評価）
+      description: この機能の優先度はどのくらいだと考えますか？
+      options:
+        - 🔴 高 (将来的にコア機能として必須になる可能性が高い)
+        - 🟡 中 (あると非常に便利・強力な機能)
+        - 🟢 低 (ニッチなユースケースや、あれば面白い機能)
+    validations:
+      required: true
+
+  - type: textarea
+    id: design-draft
+    attributes:
+      label: 設計のドラフト・技術的考察
+      description: 実装に関する簡単なアイデア、必要な依存クレート、アルゴリズムの概要などがあれば記述してください。
+    validations:
+      required: false

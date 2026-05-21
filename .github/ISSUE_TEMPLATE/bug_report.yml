@@ -1,17 +1,19 @@
-name: "Bug report"
-description: "Report a defect in scrapbox (solvers, utils, or CI)."
-title: "[Bug] "
+name: 🐛 バグ報告 (Bug Report)
+description: バグや問題を報告する
+title: "[Bug]: "
 labels: ["bug", "needs-triage"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for taking the time to file a bug. Please complete the form below to help us troubleshoot the issue.
+        バグ報告ありがとうございます。以下の情報を提供してください。
+        ※コードやエラーを報告する際は、機密性の高い物理用語（典型性、DFT等）を一般的な数学表現（relaxation, fixed_point等）に置き換えて記述してください。
+
   - type: dropdown
     id: component
     attributes:
-      label: "Component"
-      description: "Which part of scrapbox is affected?"
+      label: 影響を受けるコンポーネント
+      description: scrapboxのどの部分で問題が発生していますか？
       options:
         - solvers-relaxation
         - solvers-fixed_point
@@ -21,53 +23,63 @@ body:
         - other
     validations:
       required: true
-  - type: input
-    id: version
+
+  - type: textarea
+    id: description
     attributes:
-      label: "Version / commit"
-      description: "Which version or commit of scrapbox are you running?"
-      placeholder: "e.g., 0.1.0 or commit abc1234"
+      label: バグの内容
+      description: どのような問題が発生していますか？
+      placeholder: バグの内容を詳しく説明してください
     validations:
       required: true
+
   - type: textarea
-    id: steps-to-reproduce
+    id: reproduction
     attributes:
-      label: "Steps to reproduce"
-      description: "Exact commands or input sequence to reproduce the bug."
+      label: 発生時のコード・再現手順
+      description: バグを再現するためのコード例やコマンド手順を提供してください
+      placeholder: |
+        ```rust
+        // ここにコードを貼り付けてください
+        ```
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待される動作
+      description: 本来どのように動作すべきですか？
+    validations:
+      required: false
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の動作
+      description: 実際にはどのような動作・エラーが発生していますか？（スタックトレース等）
       render: shell
     validations:
-      required: true
-  - type: textarea
-    id: expected-behavior
-    attributes:
-      label: "Expected behavior"
-      description: "What did you expect to happen?"
-    validations:
-      required: true
-  - type: textarea
-    id: actual-behavior
-    attributes:
-      label: "Actual behavior"
-      description: "What actually happened? Include error output and stack traces."
-      render: shell
-    validations:
-      required: true
+      required: false
+
   - type: textarea
     id: environment
     attributes:
-      label: "Environment"
-      description: "OS, Rust toolchain, computational hardware, anything else relevant."
+      label: 環境情報
+      description: RustやOSのバージョンなど
       placeholder: |
-        OS: macOS 14.5 / Ubuntu 22.04 / Windows 11
-        Rust: 1.86.0 (rustup show)
-        CPU: x86_64 / aarch64
+        - Rust version: 1.86.0 (rustup show)
+        - OS: Windows 11 / macOS 14.5 / Ubuntu 22.04
+        - Hardware: x86_64 / aarch64
     validations:
       required: false
+
   - type: checkboxes
     id: pre-flight
     attributes:
-      label: "Pre-flight checks"
+      label: 事前チェック
       options:
-        - label: "I searched existing issues and Discussions and didn't find a duplicate"
+        - label: すでに同様のIssueやDiscussionが存在しないか検索して確認しました
           required: true
-        - label: "I'm willing to test a fix"
+        - label: バグ修正のテストや検証に協力できます
