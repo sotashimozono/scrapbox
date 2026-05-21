@@ -31,7 +31,7 @@ serde_json = "1.0"
 toml = "0.8"
 
 # Error handling
-thiserror = "1.0"
+thiserror = "2.0"
 
 # Structured logging — per discipline/CONVENTIONS.md §Logging.
 tracing = "0.1"
