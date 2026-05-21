@@ -1,0 +1,35 @@
+name: Rust CI Sandbox
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build_and_test:
+    name: Build and Test (Ubuntu Runners)
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy, rustfmt
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+
+    - name: Format Check
+      run: cargo fmt --all -- --check
+
+    - name: Clippy Lints
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Run Matrix Solvers Tests
+      run: cargo test --verbose

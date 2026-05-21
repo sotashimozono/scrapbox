@@ -1,0 +1,65 @@
+name: ✨ 機能リクエスト (Feature Request)
+description: 既存機能の改善や新機能を提案する
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        機能リクエストありがとうございます。
+        ※提案の記述の際は、機密性の高い物理用語（典型性、DFT等）を一般的な数学表現（relaxation, fixed_point等）に置き換えて記述してください。
+
+  - type: dropdown
+    id: request-type
+    attributes:
+      label: リクエストの種類
+      description: どのような種類のリクエストですか？
+      options:
+        - 既存機能のブラッシュアップ
+        - 新しい数理ソルバー・アルゴリズムの提案
+        - パフォーマンスの最適化
+        - CI/CDや開発者体験（DX）の向上
+        - その他
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 動機・背景
+      description: なぜこの機能が必要ですか？どのような問題を解決しますか？
+      placeholder: 例) 反復ソルバーの収束速度が〜の条件下で低下するため、緩和係数を動的に調整する機能を追加したい。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: 提案する解決策
+      description: 実装したい機能や動作の具体的な説明を記述してください。
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 代替案
+      description: 検討した他のアプローチや代替案があれば記述してください。
+    validations:
+      required: false
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: 追加コンテキスト
+      description: 数式、モックアップ、参照文献、その他の背景情報があれば記述してください。
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: pre-flight
+    attributes:
+      label: 事前チェック
+      options:
+        - label: すでに同様の提案が存在しないか検索して確認しました
+          required: true
