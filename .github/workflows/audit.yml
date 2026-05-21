@@ -40,4 +40,6 @@ jobs:
       - uses: taiki-e/install-action@b550161ef8a7bc4f2a671c0b03a18ac9ccedea1e  # v2.79.1
         with:
           tool: cargo-audit
-      - run: cargo audit --deny warnings
+      # RUSTSEC-2024-0436: paste 1.0.15 unmaintained (transitive via faer -> gemm).
+      # Re-enable once faer is bumped past gemm's paste dependency.
+      - run: cargo audit --deny warnings --ignore RUSTSEC-2024-0436
