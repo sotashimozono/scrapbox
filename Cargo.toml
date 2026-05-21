@@ -1,9 +1,9 @@
 [package]
 name = "scrapbox"
 version = "0.1.0"
-edition = "2021"
+edition = "2026"
 authors = ["sotashimozono"]
-description = "A high-performance sandboxed solver for generic matrix relaxation and iterative fixed-point problems."
+description = "solve something."
 publish = false
 
 [dependencies]
