@@ -1,0 +1,46 @@
+name: "Feature request"
+description: "Propose a new feature, numerical algorithm, or optimization for scrapbox."
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have an idea to improve the performance, accuracy, or coverage of the matrix relaxation sandbox? Please tell us about it here!
+  - type: textarea
+    id: problem-statement
+    attributes:
+      label: "Problem statement"
+      description: "Is your feature request related to a problem or limitation? Please describe it."
+      placeholder: "e.g., The iterative solver struggles to converge when..."
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-solution
+    attributes:
+      label: "Proposed solution"
+      description: "A clear and concise description of what you want to happen."
+      placeholder: "e.g., We should introduce relaxation damping by..."
+    validations:
+      required: true
+  - type: textarea
+    id: alternative-solutions
+    attributes:
+      label: "Alternative solutions"
+      description: "Any alternative solutions or features you've considered."
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: "Additional context"
+      description: "Add any other context, mathematical references, or mockups about the feature request here."
+    validations:
+      required: false
+  - type: checkboxes
+    id: pre-flight
+    attributes:
+      label: "Pre-flight checks"
+      options:
+        - label: "I searched existing issues and didn't find a duplicate"
+          required: true
