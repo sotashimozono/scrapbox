@@ -1,38 +1,45 @@
-## 説明 (Description)
+## Description
 
-修正・関連Issue: #  (あれば)
+Related issue / spec: # (if any)
 
-## 変更の種類 (Type of Change)
+## Type of change
 
-- [ ] ✨ **新機能** (`enhancement` / `feature`)
-- [ ] 🐛 **バグ修正** (`bug` / `fix`)
-- [ ] ⚡ **パフォーマンス改善** (`performance` / `optimization`)
-- [ ] 📖 **ドキュメント更新** (`documentation` / `docs`)
-- [ ] 🧰 **リファクタリング / メンテナンス** (`chore` or `refactor`)
-- [ ] 💥 **破壊的変更** (`breaking`)
+- [ ] ✨ Feature (`enhancement` / `feature`)
+- [ ] 🐛 Bug fix (`bug` / `fix`)
+- [ ] ⚡ Performance (`performance` / `optimization`)
+- [ ] 📖 Documentation (`documentation` / `docs`)
+- [ ] 🧰 Refactor / maintenance (`chore` / `refactor`)
+- [ ] 💥 Breaking change (`breaking`)
 
-## 変更内容 (Changes)
+## Changes
 
-<!-- 変更したファイルやモジュールの概要、設計上の決定事項を簡潔に記述してください。 -->
-
-- 
-
-## 設計の詳細 (Design Details)
-
-<!-- 
-機密性の高い物理ドメイン知識（典型性、DFT、スピン鎖等）を明かさず、
-一般的な数学・計算科学の用語（system_matrix、relaxation、fixed_point等）のみを用いて
-設計上の選択（アルゴリズム、並列処理の閾値、FFTの設定等）を簡潔に記述してください。
+<!--
+Describe the modified files / modules and the design decisions concisely.
+Per discipline/canonical_thermal_dft.md and discipline/CONVENTIONS.md, use
+physics-faithful terminology (Kohn-Sham Hamiltonian, Pratt recursion,
+thermal density, sudden quench, TPQ, etc.). NO mathematical camouflage.
 -->
 
-## テスト計画 (Test Plan)
+-
 
-- [ ] CI がパスしていること (CI is green on this branch)
-- [ ] ローカルで `cargo test` が成功すること
-- [ ] フォーマットが適用されていること (`cargo fmt --check`)
-- [ ] Clippy の警告が出ないこと (`cargo clippy -- -D warnings`)
-- [ ] 物理的な機密情報（論文PDF、HTML/CSS/JSレポートなど）が誤ってコミットに含まれていないことの確認
+## Discipline checklist
 
-## レビュー担当者へのメモ (Notes for Reviewer)
+- [ ] Public API names follow [`discipline/CONVENTIONS.md`](../notes/discipline/CONVENTIONS.md) (physics-faithful, no single-letter `pub` fields).
+- [ ] Any new config key is documented in [`discipline/CONFIG.md`](../notes/discipline/CONFIG.md) and rejected when missing.
+- [ ] Any new `kind = "..."` enum variant has at least one config-driven integration test.
+- [ ] Phase scope respected: this PR does not silently land a feature listed as a later milestone in [`discipline/PHASES.md`](../notes/discipline/PHASES.md).
+- [ ] Acceptance criteria from [`discipline/ACCEPTANCE.md`](../notes/discipline/ACCEPTANCE.md) are met for any new code path.
 
-<!-- レビュー時に注意してほしい点や、未解決の事項などがあれば記述してください。 -->
+## Test plan
+
+- [ ] `cargo fmt --check` clean.
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+- [ ] `cargo test --workspace --all-features` passes locally.
+- [ ] `cargo doc --workspace --no-deps --all-features` clean with `RUSTDOCFLAGS=-D warnings`.
+- [ ] Coverage does not regress (Codecov check on the PR).
+- [ ] If a reference dataset is touched, `scrapbox validate configs/<benchmark>.toml` still passes.
+- [ ] No paper PDF, HTML/CSS/JS report, or other non-tracked file (per `.gitignore`) is accidentally included.
+
+## Notes for reviewer
+
+<!-- Pitfalls, open questions, things to verify. -->

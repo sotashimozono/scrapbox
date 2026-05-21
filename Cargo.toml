@@ -3,27 +3,76 @@ name = "scrapbox"
 version = "0.1.0"
 edition = "2021"
 authors = ["sotashimozono"]
-description = "A high-performance sandboxed solver for generic matrix relaxation and iterative fixed-point problems."
+description = "Reference Rust implementation of canonical-ensemble finite-temperature density functional theory for lattice fermion systems, with quantum-thermodynamics observables (work statistics, irreversible entropy) and a planned typicality (TPQ) engine."
+license = "MIT"
+repository = "https://github.com/sotashimozono/scrapbox"
+keywords = ["dft", "kohn-sham", "hubbard", "thermal", "quantum-thermodynamics"]
+categories = ["science", "simulation"]
 publish = false
 
 [dependencies]
-# Fast, modern linear algebra (alternative to MKL/Eigen)
+# Linear algebra — `faer` is the project's primary matrix library
+# (see discipline/canonical_thermal_dft.md Sec VII for the seed Rust code).
 faer = { version = "0.19", features = ["rayon"] }
 ndarray = { version = "0.15", features = ["serde"] }
 
-# Parallel computing with zero data-race guarantees
+# Parallelism — used inside `faer` and (future) sweep mode.
 rayon = "1.10"
 
-# Fast Fourier Transform (comparable to FFTW)
-rustfft = "6.2"
-
-# Safe, fast random number generator (essential for random vector/typical state initialization)
+# Random number generation — Haar sampling for the future TPQ engine
+# (see notes/Zettelkasten/PermanentNote/tpq-state-canonical.md).
 rand = "0.8"
 rand_distr = "0.5"
 
-# Serialization / Deserialization (for config/metadata inputs)
+# Configuration / serialization — drives the entire harness
+# (see discipline/CONFIG.md and discipline/HARNESS.md).
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "0.8"
 
 # Error handling
 thiserror = "1.0"
+
+# Structured logging — per discipline/CONVENTIONS.md §Logging.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+# Property-based testing for invariants (Pratt sum-rule, generalized FDR).
+proptest = "1.4"
+# Temporary directories for output-writer integration tests.
+tempfile = "3.10"
+
+[[bin]]
+name = "scrapbox"
+path = "src/bin/scrapbox.rs"
+
+[lints.rust]
+missing_docs = "warn"
+unused_qualifications = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+# Pragmatic exceptions — re-evaluate per PR.
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+# `missing_const_for_fn` is over-eager: it flags every `Self { ... }` constructor
+# even when the function will gain side effects (logging, validation) once
+# its `todo!()` body is filled in. Revisit per ACCEPTANCE.md when v1.0 freezes.
+missing_const_for_fn = "allow"
+# Observables and Output legitimately want individual on/off flags (one per
+# observable / dump kind, per CONFIG.md). Bitflags would be over-engineering.
+struct_excessive_bools = "allow"
+# Documenting every `assert!`-induced panic as `# Panics` would just rephrase
+# the assert message. Real failure modes go through `ScrapboxError`.
+missing_panics_doc = "allow"
+# Physical lattice models have `num_sites << 2^52`; the precision loss
+# warning produces noise on every `as f64` cast involving a lattice size
+# or a particle count.
+cast_precision_loss = "allow"
+# Inside the Pratt recursion (and similar math-heavy kernels), indexing
+# loops match the textbook formula. Rewriting as iterator chains hurts
+# auditability without changing semantics.
+needless_range_loop = "allow"

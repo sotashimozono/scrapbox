@@ -3,17 +3,27 @@ target/
 **/*.rs.bk
 Cargo.lock
 
+# Run outputs and scratch
+runs/
+*.bak
+*.tmp
+
 # Paper and Report Data (LEAK PREVENTION)
 *.pdf
 *.html
 *.css
 *.js
 *.json
+# Re-allow specific tracked items below
 !**/Cargo.toml
-!**/vectors.json # if any non-sensitive test fixtures are needed
+# Reference datasets used by tests (e.g. tests/references/*.json)
+!tests/**/*.json
 
 # IDEs & System
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Knowledge base / Zettelkasten — not tracked (public repo)
+notes/

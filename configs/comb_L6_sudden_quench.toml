@@ -1,0 +1,52 @@
+schema_version = "0.1"
+
+[meta]
+name = "comb_L6_sudden_quench"
+description = "Zawadzki 2022 comb potential, L=6, sudden quench V_amp 0.5 to 4.5"
+created = "2026-05-21"
+tags = ["benchmark", "zawadzki2022", "sudden_quench"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 6
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 3
+beta = 2.0
+external_potential.kind = "comb"
+external_potential.amplitude = 0.5
+
+[xc_functional]
+kind = "hubbard_lda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 300
+tolerance = 1e-9
+mixing.kind = "linear"
+mixing.alpha = 0.3
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "comb"
+final_external_potential.amplitude = 4.5
+
+[observables]
+mean_work = true
+irreversible_entropy = true
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/comb_L6_sudden_quench"
+format = "json"
+dump_density = true
+dump_spectrum = true
+overwrite = false
