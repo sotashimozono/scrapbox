@@ -563,8 +563,25 @@ pub struct Sweep {
 pub struct SweepAxis {
     /// Dotted config key (e.g. `"hamiltonian.on_site_interaction"`).
     pub key: String,
+    /// Optional short label for subdir templates. Defaults to the last
+    /// dotted segment of `key`.
+    #[serde(default)]
+    pub label: Option<String>,
     /// Values to substitute in turn.
     pub values: Vec<f64>,
+}
+
+impl SweepAxis {
+    /// Label used in subdir templates — `label` if set, else the last
+    /// dotted segment of `key`.
+    #[must_use]
+    pub fn effective_label(&self) -> &str {
+        self.label.as_deref().unwrap_or_else(|| {
+            self.key
+                .rsplit_once('.')
+                .map_or(self.key.as_str(), |(_, last)| last)
+        })
+    }
 }
 
 const fn default_sweep_parallelism() -> usize {
