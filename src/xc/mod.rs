@@ -1,5 +1,6 @@
 //! Layer 1 — exchange-correlation functionals.
 
+pub mod balda;
 pub mod hubbard_lda;
 pub mod non_interacting;
 
@@ -12,6 +13,8 @@ use crate::hamiltonian::KohnShamHamiltonian;
 pub enum ExchangeCorrelation {
     /// Single-site analytical Hubbard LDA.
     HubbardLda(hubbard_lda::HubbardLda),
+    /// BALDA — Bethe-ansatz local density approximation (Lima 2003).
+    Balda(balda::Balda),
     /// `λ^{h-xc} = 0` everywhere.
     NonInteracting,
 }
@@ -25,6 +28,10 @@ impl ExchangeCorrelation {
                 hamiltonian.beta,
                 params.clone(),
             ))),
+            XcConfig::Balda { params } => Ok(Self::Balda(balda::Balda::new(
+                hamiltonian.on_site_interaction / hamiltonian.hopping_j,
+                params.clone(),
+            ))),
             XcConfig::NonInteracting => Ok(Self::NonInteracting),
         }
     }
@@ -34,6 +41,7 @@ impl ExchangeCorrelation {
     pub fn evaluate(&self, density: &[f64]) -> Vec<f64> {
         match self {
             Self::HubbardLda(lda) => lda.evaluate(density),
+            Self::Balda(b) => b.evaluate(density),
             Self::NonInteracting => vec![0.0; density.len()],
         }
     }

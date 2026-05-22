@@ -37,6 +37,9 @@ thiserror = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# Bessel functions for BALDA xc (Lieb-Wu integral, Lima 2003).
+libm = "0.2"
+
 [dev-dependencies]
 # Property-based testing for invariants (Pratt sum-rule, generalized FDR).
 proptest = "1.4"
