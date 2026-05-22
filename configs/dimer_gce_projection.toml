@@ -1,0 +1,47 @@
+schema_version = "0.2"
+
+[meta]
+name = "dimer_gce_projection"
+description = "Hubbard dimer with GCE+projection density evaluator. Cross-validates against Pratt recursion."
+created = "2026-05-22"
+tags = ["v0.2", "gce-projection"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 2
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 1
+beta = 2.0
+external_potential.kind = "uniform"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "hubbard_lda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "gce_plus_projection"
+params.num_quadrature_points = 64
+
+[scf]
+max_iterations = 200
+tolerance = 1e-10
+mixing.kind = "linear"
+mixing.alpha = 0.5
+initial_density.kind = "uniform"
+
+[observables]
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/dimer_gce_projection"
+format = "json"
+dump_density = true
+dump_spectrum = true
+dump_partition_function = true
+overwrite = true

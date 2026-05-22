@@ -303,6 +303,38 @@ pub enum DensityEvaluator {
         #[serde(default)]
         params: PrattParams,
     },
+    /// Grand-canonical fugacity-circle quadrature with Fourier projection.
+    GcePlusProjection {
+        /// Tunable knobs.
+        #[serde(default)]
+        params: GceProjectionParams,
+    },
+}
+
+/// Numerical parameters for GCE+projection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GceProjectionParams {
+    /// Number of points on the unit-circle fugacity contour. Must be
+    /// at least `N_σ + 1`; default 64 oversamples generously.
+    #[serde(default = "default_gce_num_quadrature_points")]
+    pub num_quadrature_points: usize,
+    /// Subtract `ε_min` before exponentiation (recommended).
+    #[serde(default = "default_true")]
+    pub spectrum_shift: bool,
+}
+
+impl Default for GceProjectionParams {
+    fn default() -> Self {
+        Self {
+            num_quadrature_points: default_gce_num_quadrature_points(),
+            spectrum_shift: true,
+        }
+    }
+}
+
+const fn default_gce_num_quadrature_points() -> usize {
+    64
 }
 
 /// Numerical parameters for Pratt recursion.
