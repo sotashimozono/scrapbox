@@ -1,4 +1,4 @@
-#![allow(clippy::similar_names)]
+#![allow(clippy::similar_names, clippy::too_many_lines)]
 //! Layer 7 — parameter-grid sweep runner.
 //!
 //! Consumes `[sweep]` from a config and runs the cartesian product of
@@ -48,10 +48,14 @@ pub fn run(config_path: &Path) -> Result<()> {
         sweep.axes.len()
     );
 
-    let cell_configs: Vec<(usize, String, String, Config)> = cells
+    // Pre-build every cell config sequentially. Collect all build errors
+    // rather than short-circuit so a malformed sweep does not hide later
+    // failures behind the first one.
+    #[allow(clippy::needless_collect)]
+    let cell_results: Vec<Result<SweepCell>> = cells
         .iter()
         .enumerate()
-        .map(|(idx, cell)| -> Result<(usize, String, String, Config)> {
+        .map(|(idx, cell)| -> Result<SweepCell> {
             let mut patched = base_table.clone();
             for (axis_idx, &value_idx) in cell.iter().enumerate() {
                 let axis = &sweep.axes[axis_idx];
@@ -69,16 +73,62 @@ pub fn run(config_path: &Path) -> Result<()> {
                     message: format!("re-serialize of patched sweep cell failed: {e}"),
                 })?;
             let cell_cfg = Config::from_toml_str(&patched_str)?;
-            Ok((idx, cell_summary(&sweep.axes, cell), subdir, cell_cfg))
+            Ok(SweepCell {
+                idx,
+                summary: cell_summary(&sweep.axes, cell),
+                subdir,
+                config: cell_cfg,
+            })
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
+    let (oks, errs): (Vec<_>, Vec<_>) = cell_results.into_iter().partition(Result::is_ok);
+    if !errs.is_empty() {
+        for e in &errs {
+            if let Err(err) = e {
+                eprintln!("  sweep cell config failed: {err}");
+            }
+        }
+        return Err(errs
+            .into_iter()
+            .next()
+            .and_then(Result::err)
+            .expect("partition guarantees at least one Err"));
+    }
+    let cell_configs: Vec<SweepCell> = oks.into_iter().map(Result::unwrap).collect();
+
+    // Pre-flight: subdir collisions would silently lose data via
+    // overwrite=true. Fail fast if two cells render to the same path.
+    let mut seen = std::collections::HashSet::new();
+    for cell in &cell_configs {
+        if !seen.insert(cell.subdir.as_str()) {
+            return Err(ScrapboxError::ConfigValidation {
+                message: format!(
+                    "sweep subdir collision: {} appears in multiple cells",
+                    cell.subdir
+                ),
+            });
+        }
+    }
 
     let total = cell_configs.len();
-    if sweep.parallelism == 1 {
-        for (idx, summary, subdir, cfg) in cell_configs {
-            eprintln!("  cell {}/{}: {} -> {}", idx + 1, total, summary, subdir);
-            bin_support::solve_and_write(&cfg)?;
-        }
+    // Both branches share semantics: every cell writes to a distinct
+    // subdir (verified above), so concurrent I/O is safe. A dedicated
+    // rayon ThreadPoolBuilder honours the user's parallelism cap and
+    // avoids contaminating the global pool that faer uses for dense diag.
+    let results: Vec<Result<()>> = if sweep.parallelism == 1 {
+        cell_configs
+            .iter()
+            .map(|cell| {
+                eprintln!(
+                    "  cell {}/{}: {} -> {}",
+                    cell.idx + 1,
+                    total,
+                    cell.summary,
+                    cell.subdir
+                );
+                bin_support::solve_and_write(&cell.config)
+            })
+            .collect()
     } else {
         use rayon::prelude::*;
         let pool = rayon::ThreadPoolBuilder::new()
@@ -87,26 +137,41 @@ pub fn run(config_path: &Path) -> Result<()> {
             .map_err(|e| ScrapboxError::ConfigValidation {
                 message: format!("rayon thread pool build failed: {e}"),
             })?;
-        let results: Vec<Result<()>> = pool.install(|| {
+        pool.install(|| {
             cell_configs
                 .par_iter()
-                .map(|(idx, summary, subdir, cfg)| {
+                .map(|cell| {
                     eprintln!(
                         "  cell {}/{}: {} -> {} (parallel)",
-                        idx + 1,
+                        cell.idx + 1,
                         total,
-                        summary,
-                        subdir
+                        cell.summary,
+                        cell.subdir
                     );
-                    bin_support::solve_and_write(cfg)
+                    bin_support::solve_and_write(&cell.config)
                 })
                 .collect()
-        });
-        for r in results {
-            r?;
+        })
+    };
+    // Collect ALL errors rather than short-circuit - rayon already ran
+    // every cell to completion, so dropping later errors would force
+    // users to fix-rerun-discover for each failing cell.
+    let errors: Vec<ScrapboxError> = results.into_iter().filter_map(Result::err).collect();
+    if !errors.is_empty() {
+        for e in &errors {
+            eprintln!("  cell failure: {e}");
         }
+        return Err(errors.into_iter().next().expect("checked non-empty"));
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct SweepCell {
+    idx: usize,
+    summary: String,
+    subdir: String,
+    config: Config,
 }
 
 fn cartesian_product(lens: Vec<usize>) -> Vec<Vec<usize>> {
