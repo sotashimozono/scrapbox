@@ -1,0 +1,55 @@
+schema_version = "0.2"
+
+[meta]
+name = "dimer_uniform_quench"
+description = "Hubbard dimer with uniform-V quench. H^0 and H^f commute → FDR closes exactly: <S_irr>=0, σ_w²=0, Θ_2=0."
+created = "2026-05-22"
+tags = ["v0.2", "fdr-consistency", "commuting-quench"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 2
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 1
+beta = 2.0
+external_potential.kind = "uniform"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "hubbard_lda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 300
+tolerance = 1e-10
+mixing.kind = "pulay"
+mixing.alpha = 0.2
+mixing.history_depth = 6
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "uniform"
+final_external_potential.amplitude = 0.5
+
+[observables]
+mean_work = true
+irreversible_entropy = true
+work_variance = true
+theta_2.method = "zero"
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/dimer_uniform_quench"
+format = "json"
+dump_density = true
+dump_spectrum = true
+overwrite = true
