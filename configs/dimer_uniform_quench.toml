@@ -1,10 +1,10 @@
 schema_version = "0.2"
 
 [meta]
-name = "dimer_validate"
-description = "Hubbard dimer fidelity regression: KS-DFT vs self-reference from v0.1 baseline."
-created = "2026-05-21"
-tags = ["smoke", "validate", "v0.1", "regression"]
+name = "dimer_uniform_quench"
+description = "Hubbard dimer with uniform-V quench. H^0 and H^f commute → FDR closes exactly: <S_irr>=0, σ_w²=0, Θ_2=0."
+created = "2026-05-22"
+tags = ["v0.2", "fdr-consistency", "commuting-quench"]
 
 [hamiltonian]
 model = "hubbard_1d_inhomogeneous"
@@ -27,29 +27,29 @@ kind = "dense_diag"
 kind = "pratt_recursion"
 
 [scf]
-max_iterations = 200
+max_iterations = 300
 tolerance = 1e-10
-mixing.kind = "linear"
-mixing.alpha = 0.5
+mixing.kind = "pulay"
+mixing.alpha = 0.2
+mixing.history_depth = 6
 initial_density.kind = "uniform"
 
+[quench]
+kind = "sudden"
+final_external_potential.kind = "uniform"
+final_external_potential.amplitude = 0.5
+
 [observables]
-mean_work = false
-irreversible_entropy = false
+mean_work = true
+irreversible_entropy = true
+work_variance = true
+theta_2.method = "zero"
 free_energy = true
 partition_function = true
 
 [output]
-directory = "runs/dimer_validate"
+directory = "runs/dimer_uniform_quench"
 format = "json"
 dump_density = true
 dump_spectrum = true
-dump_partition_function = true
 overwrite = true
-
-[validation]
-reference_path = "tests/references/dimer_smoke.json"
-tolerances.density = 1e-8
-tolerances.free_energy = 1e-8
-tolerances.mean_work = 1e-8
-fail_on_mismatch = true

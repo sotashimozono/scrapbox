@@ -1,10 +1,10 @@
 schema_version = "0.2"
 
 [meta]
-name = "comb_L6_sudden_quench"
-description = "Zawadzki 2022 comb potential, L=6, sudden quench V_amp 0.5 to 4.5"
-created = "2026-05-21"
-tags = ["benchmark", "zawadzki2022", "sudden_quench"]
+name = "comb_L6_pulay"
+description = "L=6 Hubbard comb with Pulay/DIIS mixing — Mott-regime convergence test for v0.2."
+created = "2026-05-22"
+tags = ["benchmark", "v0.2", "pulay", "mott"]
 
 [hamiltonian]
 model = "hubbard_1d_inhomogeneous"
@@ -27,10 +27,11 @@ kind = "dense_diag"
 kind = "pratt_recursion"
 
 [scf]
-max_iterations = 300
+max_iterations = 200
 tolerance = 1e-9
-mixing.kind = "linear"
-mixing.alpha = 0.3
+mixing.kind = "pulay"
+mixing.alpha = 0.1
+mixing.history_depth = 8
 initial_density.kind = "uniform"
 
 [quench]
@@ -41,12 +42,14 @@ final_external_potential.amplitude = 4.5
 [observables]
 mean_work = true
 irreversible_entropy = true
+work_variance = true
+theta_2.method = "zero"
 free_energy = true
 partition_function = true
 
 [output]
-directory = "runs/comb_L6_sudden_quench"
+directory = "runs/comb_L6_pulay"
 format = "json"
 dump_density = true
 dump_spectrum = true
-overwrite = false
+overwrite = true

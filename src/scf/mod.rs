@@ -54,7 +54,7 @@ impl CanonicalThermalDFTSolver {
     pub fn solve(&self) -> Result<KsState> {
         let num_sites = self.hamiltonian.num_sites;
         let mut density = self.initial_density()?;
-        let mixer = DensityMixer::from_config(&self.scf_config.mixing);
+        let mut mixer = DensityMixer::from_config(&self.scf_config.mixing);
 
         let mut residual = f64::INFINITY;
         for iteration in 0..self.scf_config.max_iterations {

@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// `schema_version` value this build supports.
-pub const SUPPORTED_SCHEMA_VERSION: &str = "0.1";
+pub const SUPPORTED_SCHEMA_VERSION: &str = "0.2";
 
 /// Top-level `config.toml` deserialization target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,6 +269,26 @@ const fn default_clamp_eta() -> f64 {
 pub enum SpectrumSource {
     /// Dense LAPACK-style eigendecomposition via `faer`.
     DenseDiag,
+    /// Lanczos tridiagonalization with optional Krylov truncation.
+    Lanczos {
+        /// Krylov subspace dimension. `None` (omitted) = full (`= n`).
+        #[serde(default)]
+        krylov_dim: Option<usize>,
+        /// Hard cap on iterations.
+        #[serde(default = "default_lanczos_max_iter")]
+        max_iter: usize,
+        /// Invariant-subspace termination threshold.
+        #[serde(default = "default_lanczos_tol")]
+        tol: f64,
+    },
+}
+
+const fn default_lanczos_max_iter() -> usize {
+    256
+}
+
+const fn default_lanczos_tol() -> f64 {
+    1.0e-12
 }
 
 // ─── DensityEvaluator ──────────────────────────────────────────────────
@@ -283,6 +303,38 @@ pub enum DensityEvaluator {
         #[serde(default)]
         params: PrattParams,
     },
+    /// Grand-canonical fugacity-circle quadrature with Fourier projection.
+    GcePlusProjection {
+        /// Tunable knobs.
+        #[serde(default)]
+        params: GceProjectionParams,
+    },
+}
+
+/// Numerical parameters for GCE+projection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GceProjectionParams {
+    /// Number of points on the unit-circle fugacity contour. Must be
+    /// at least `N_σ + 1`; default 64 oversamples generously.
+    #[serde(default = "default_gce_num_quadrature_points")]
+    pub num_quadrature_points: usize,
+    /// Subtract `ε_min` before exponentiation (recommended).
+    #[serde(default = "default_true")]
+    pub spectrum_shift: bool,
+}
+
+impl Default for GceProjectionParams {
+    fn default() -> Self {
+        Self {
+            num_quadrature_points: default_gce_num_quadrature_points(),
+            spectrum_shift: true,
+        }
+    }
+}
+
+const fn default_gce_num_quadrature_points() -> usize {
+    64
 }
 
 /// Numerical parameters for Pratt recursion.
@@ -331,6 +383,21 @@ pub enum Mixing {
         /// Mixing fraction `α ∈ (0, 1]`.
         alpha: f64,
     },
+    /// Pulay / DIIS extrapolation over the last `history_depth` density
+    /// residuals. Falls back to linear mixing until the history is filled.
+    /// See `notes/Zettelkasten/PermanentNote/canonical-ks-construction.md`
+    /// "Failure modes / where typicality enters" §2 for context.
+    Pulay {
+        /// Mixing fraction applied to the residual when extrapolating.
+        alpha: f64,
+        /// Number of past (density, residual) pairs to retain. Typical: 6-8.
+        #[serde(default = "default_pulay_history_depth")]
+        history_depth: usize,
+    },
+}
+
+const fn default_pulay_history_depth() -> usize {
+    8
 }
 
 /// Initial-density specification for the SCF loop.
@@ -371,12 +438,35 @@ pub struct Observables {
     /// Compute `<S_irr> = β(<W> − ΔF)` (requires `[quench]`).
     #[serde(default)]
     pub irreversible_entropy: bool,
+    /// Compute the second moment `<W²>` and variance `σ_w²` of the
+    /// sudden-quench work distribution (Palamara 2024 eq 28).
+    /// Requires `[quench]`.
+    #[serde(default)]
+    pub work_variance: bool,
+    /// Quantum correction `Θ_2` (Palamara 2024 eq 30) needed when the
+    /// pre- and post-quench Hamiltonians do not commute.
+    #[serde(default)]
+    pub theta_2: Theta2Spec,
     /// Dump `F = -β⁻¹ ln Z_N`.
     #[serde(default = "default_true")]
     pub free_energy: bool,
     /// Dump the per-spin canonical partition function.
     #[serde(default = "default_true")]
     pub partition_function: bool,
+}
+
+/// How to estimate `Θ_2` per Palamara 2024 §IV.1.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Theta2Spec {
+    /// `zero` (default — neglect) or `lda` (requires a homogeneous-
+    /// system reference; lands fully in v0.3 once BALDA is wired).
+    #[serde(default = "default_theta_2_method")]
+    pub method: String,
+}
+
+fn default_theta_2_method() -> String {
+    "zero".to_string()
 }
 
 // ─── Output ────────────────────────────────────────────────────────────
@@ -473,8 +563,25 @@ pub struct Sweep {
 pub struct SweepAxis {
     /// Dotted config key (e.g. `"hamiltonian.on_site_interaction"`).
     pub key: String,
+    /// Optional short label for subdir templates. Defaults to the last
+    /// dotted segment of `key`.
+    #[serde(default)]
+    pub label: Option<String>,
     /// Values to substitute in turn.
     pub values: Vec<f64>,
+}
+
+impl SweepAxis {
+    /// Label used in subdir templates — `label` if set, else the last
+    /// dotted segment of `key`.
+    #[must_use]
+    pub fn effective_label(&self) -> &str {
+        self.label.as_deref().unwrap_or_else(|| {
+            self.key
+                .rsplit_once('.')
+                .map_or(self.key.as_str(), |(_, last)| last)
+        })
+    }
 }
 
 const fn default_sweep_parallelism() -> usize {
@@ -486,7 +593,7 @@ mod tests {
     use super::*;
 
     const FULL_DIMER_TOML: &str = r#"
-schema_version = "0.1"
+schema_version = "0.2"
 
 [meta]
 name = "dimer_smoke"
@@ -531,7 +638,7 @@ format = "json"
     #[test]
     fn parses_full_dimer_config() {
         let cfg = Config::from_toml_str(FULL_DIMER_TOML).expect("should parse");
-        assert_eq!(cfg.schema_version, "0.1");
+        assert_eq!(cfg.schema_version, "0.2");
         assert_eq!(cfg.meta.name, "dimer_smoke");
         assert!(matches!(cfg.xc_functional, XcFunctional::HubbardLda { .. }));
         assert!(matches!(cfg.spectrum_source, SpectrumSource::DenseDiag));
@@ -575,7 +682,7 @@ format = "json"
 
     #[test]
     fn rejects_schema_version_mismatch() {
-        let raw = FULL_DIMER_TOML.replace("\"0.1\"", "\"0.99\"");
+        let raw = FULL_DIMER_TOML.replace("\"0.2\"", "\"0.99\"");
         let err = Config::from_toml_str(&raw).expect_err("must reject");
         assert!(matches!(err, ScrapboxError::SchemaVersionMismatch { .. }));
     }
