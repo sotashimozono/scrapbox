@@ -22,13 +22,13 @@ fn doctor_on_dimer_smoke_emits_report() {
         .expect("scrapbox doctor");
     assert!(status.success(), "scrapbox doctor failed");
 
+    // doctor writes next to the config, not into runs/
     let report_path = std::path::Path::new(manifest)
-        .join("runs")
-        .join("dimer_smoke")
-        .join("doctor_report.json");
+        .join("configs")
+        .join("dimer_smoke.doctor_report.json");
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&report_path).unwrap()).unwrap();
-    assert_eq!(json["status"].as_str().unwrap(), "ok");
+    // status field dropped - presence of the file is the success signal
     let lines = json["lines"].as_array().unwrap();
     assert!(lines.len() >= 8, "doctor report should have >= 8 lines");
     let joined: String = lines

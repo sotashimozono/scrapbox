@@ -3,11 +3,12 @@
 
 use std::path::Path;
 
-use crate::config::{Config, Quench};
+use crate::config::{Config, Mixing, Quench};
 use crate::density::CanonicalDensityEvaluator;
 use crate::error::{Result, ScrapboxError};
 use crate::hamiltonian::KohnShamHamiltonian;
 use crate::spectrum::SpectrumSource;
+use crate::validation::ReferenceDataset;
 use crate::xc::ExchangeCorrelation;
 
 /// Run the doctor pass on the config at `config_path`.
@@ -15,11 +16,17 @@ pub fn run(config_path: &Path) -> Result<()> {
     let cfg = Config::from_file(config_path)?;
     let mut report = Vec::<String>::new();
 
-    report.push(format!("config: {}", config_path.display()));
+    // Canonicalize so CI artifacts pulled to a different machine can still
+    // be traced back to the source config. Falls back to the original if
+    // the path cant be resolved (deleted between parse and now).
+    let resolved_config = config_path
+        .canonicalize()
+        .unwrap_or_else(|_| config_path.to_path_buf());
+    report.push(format!("config: {}", resolved_config.display()));
     report.push(format!("schema_version: {}", cfg.schema_version));
     report.push(format!("meta.name: {}", cfg.meta.name));
     report.push(format!(
-        "hamiltonian: L={}, J={}, U={}, beta={}, N_per_spin={}",
+        "hamiltonian: L={}, J={:.3}, U={:.3}, beta={:.3}, N_per_spin={}",
         cfg.hamiltonian.num_sites,
         cfg.hamiltonian.hopping_j,
         cfg.hamiltonian.on_site_interaction,
@@ -47,20 +54,16 @@ pub fn run(config_path: &Path) -> Result<()> {
     report.push(format!("density: {}", density_kind_name(&density)));
 
     report.push(format!(
-        "scf: max_iter={}, tol={}, mixing={}",
+        "scf: max_iter={}, tol={:e}, mixing={}",
         cfg.scf.max_iterations,
         cfg.scf.tolerance,
         mixing_kind_name(&cfg.scf.mixing),
     ));
 
-    if let Some(Quench::Sudden {
-        final_external_potential,
-    }) = &cfg.quench
-    {
-        let lengths = final_external_potential.to_site_values(cfg.hamiltonian.num_sites);
+    if let Some(Quench::Sudden { .. }) = &cfg.quench {
         report.push(format!(
-            "quench: sudden, final_V length = {}",
-            lengths.len()
+            "quench: sudden, expected final_V length = {}",
+            cfg.hamiltonian.num_sites
         ));
     } else {
         report.push("quench: none".into());
@@ -78,8 +81,24 @@ pub fn run(config_path: &Path) -> Result<()> {
         cfg.output.directory, cfg.output.format, cfg.output.overwrite,
     ));
 
-    if cfg.validation.is_some() {
-        report.push("validation: present".into());
+    if let Some(validation_cfg) = &cfg.validation {
+        // Doctor is the layer that should catch missing reference files
+        // before SCF burns minutes only to fail at validate time.
+        match ReferenceDataset::from_file(&validation_cfg.reference_path) {
+            Ok(_) => report.push(format!(
+                "validation: present, reference_path={} (readable)",
+                validation_cfg.reference_path.display()
+            )),
+            Err(e) => {
+                report.push(format!(
+                    "validation: present, reference_path={} (UNREADABLE: {e})",
+                    validation_cfg.reference_path.display()
+                ));
+                return Err(e);
+            }
+        }
+    } else {
+        report.push("validation: none".into());
     }
     if let Some(sweep) = &cfg.sweep {
         report.push(format!(
@@ -99,17 +118,16 @@ pub fn run(config_path: &Path) -> Result<()> {
         eprintln!("  {line}");
     }
 
+    // Drop "status" - presence of the file is the success signal.
+    // Absence could mean either "doctor never ran" or "doctor failed
+    // before write"; a hardcoded "ok" would mislead either way.
     let report_json = serde_json::json!({
-        "config_path": config_path.display().to_string(),
+        "config_path": resolved_config.display().to_string(),
         "lines": report,
-        "status": "ok",
     });
-    let out_dir = std::path::PathBuf::from(&cfg.output.directory);
-    std::fs::create_dir_all(&out_dir).map_err(|source| ScrapboxError::Artifact {
-        path: out_dir.clone(),
-        message: format!("create doctor output dir: {source}"),
-    })?;
-    let report_path = out_dir.join("doctor_report.json");
+    // Write next to the config (not into output.directory) so doctor does
+    // not side-effect the production runs/ tree just to surface a report.
+    let report_path = config_path.with_extension("doctor_report.json");
     let file = std::fs::File::create(&report_path).map_err(|source| ScrapboxError::Artifact {
         path: report_path.clone(),
         message: format!("create doctor_report.json: {source}"),
@@ -141,9 +159,9 @@ fn density_kind_name(d: &CanonicalDensityEvaluator) -> &'static str {
     }
 }
 
-fn mixing_kind_name(m: &crate::config::Mixing) -> &'static str {
+fn mixing_kind_name(m: &Mixing) -> &'static str {
     match m {
-        crate::config::Mixing::Linear { .. } => "linear",
-        crate::config::Mixing::Pulay { .. } => "pulay",
+        Mixing::Linear { .. } => "linear",
+        Mixing::Pulay { .. } => "pulay",
     }
 }
