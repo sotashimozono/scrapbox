@@ -127,12 +127,14 @@ pub fn diagonalize(matrix: &Mat<f64>, params: &LanczosParams) -> Result<Eigendec
         }
     }
 
-    let eigen = t.selfadjoint_eigendecomposition(Side::Lower);
-    let s_col = eigen.s().column_vector();
-    let mut indexed: Vec<(usize, f64)> = (0..effective_m).map(|k| (k, s_col.read(k))).collect();
+    let eigen = t
+        .self_adjoint_eigen(Side::Lower)
+        .expect("self-adjoint EVD failed");
+    let s_col = eigen.S().column_vector();
+    let mut indexed: Vec<(usize, f64)> = (0..effective_m).map(|k| (k, s_col[k])).collect();
     indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("Ritz values must be finite"));
 
-    let u_t = eigen.u();
+    let u_t = eigen.U();
     let mut eigenvalues = Vec::with_capacity(effective_m);
     let mut eigenvectors = Mat::<f64>::zeros(n, effective_m);
     for (new_idx, (orig_idx, value)) in indexed.into_iter().enumerate() {

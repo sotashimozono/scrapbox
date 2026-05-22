@@ -89,14 +89,16 @@ fn ks_density_matches_ed_at_half_filling() {
     let beta = 2.0_f64;
 
     let h = dimer_hamiltonian(j, u);
-    let eigen = h.selfadjoint_eigendecomposition(Side::Lower);
+    let eigen = h
+        .self_adjoint_eigen(Side::Lower)
+        .expect("self-adjoint EVD failed");
 
-    let s_col = eigen.s().column_vector();
-    let u_mat = eigen.u();
+    let s_col = eigen.S().column_vector();
+    let u_mat = eigen.U();
     let mut eigvals = [0.0_f64; 4];
     let mut eigvecs = Mat::<f64>::zeros(4, 4);
     for k in 0..4 {
-        eigvals[k] = s_col.read(k);
+        eigvals[k] = s_col[k];
         for i in 0..4 {
             eigvecs[(i, k)] = u_mat[(i, k)];
         }
@@ -134,9 +136,11 @@ fn ed_spectrum_matches_analytic_formula() {
     let j = 1.0_f64;
     let u = 4.0_f64;
     let h = dimer_hamiltonian(j, u);
-    let eigen = h.selfadjoint_eigendecomposition(Side::Lower);
-    let s_col = eigen.s().column_vector();
-    let mut eigvals: Vec<f64> = (0..4).map(|k| s_col.read(k)).collect();
+    let eigen = h
+        .self_adjoint_eigen(Side::Lower)
+        .expect("self-adjoint EVD failed");
+    let s_col = eigen.S().column_vector();
+    let mut eigvals: Vec<f64> = (0..4).map(|k| s_col[k]).collect();
     eigvals.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let e_singlet_lower = u.midpoint(-(u.mul_add(u, 16.0 * j * j)).sqrt());
     let e_singlet_upper = u.midpoint((u.mul_add(u, 16.0 * j * j)).sqrt());

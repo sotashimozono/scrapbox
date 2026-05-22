@@ -17,17 +17,19 @@ pub fn diagonalize(matrix: &Mat<f64>) -> Result<Eigendecomposition> {
         matrix.ncols(),
     );
     let n = matrix.nrows();
-    let eigen = matrix.selfadjoint_eigendecomposition(Side::Lower);
+    let eigen = matrix
+        .self_adjoint_eigen(Side::Lower)
+        .expect("self-adjoint EVD failed");
 
     // Read eigenvalues into a Vec.
-    let s_col = eigen.s().column_vector();
-    let mut indexed: Vec<(usize, f64)> = (0..n).map(|k| (k, s_col.read(k))).collect();
+    let s_col = eigen.S().column_vector();
+    let mut indexed: Vec<(usize, f64)> = (0..n).map(|k| (k, s_col[k])).collect();
     // faer returns ascending order in practice, but sort defensively.
     indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("eigenvalues must be finite"));
 
     let mut eigenvalues = Vec::with_capacity(n);
     let mut eigenvectors = Mat::<f64>::zeros(n, n);
-    let u_ref = eigen.u();
+    let u_ref = eigen.U();
     for (new_idx, (orig_idx, value)) in indexed.into_iter().enumerate() {
         eigenvalues.push(value);
         for i in 0..n {
