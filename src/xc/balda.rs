@@ -1,3 +1,4 @@
+#![allow(unknown_lints, clippy::manual_is_multiple_of)]
 //! BALDA — Bethe-Ansatz Local Density Approximation (Lima, Silva,
 //! Capelle 2003 PRL 90 146402).
 //!
@@ -161,7 +162,7 @@ fn lieb_wu_integral(u: f64, params: &BaldaParams) -> f64 {
     }
     let x_max = (60.0_f64).max(28.0 / u.max(0.05));
     let n = params.lieb_simpson_intervals;
-    let n = if n.is_multiple_of(2) { n } else { n + 1 };
+    let n = if n % 2 == 0 { n } else { n + 1 };
     let h = x_max / (n as f64);
 
     let mut acc = 0.0_f64;
@@ -169,7 +170,7 @@ fn lieb_wu_integral(u: f64, params: &BaldaParams) -> f64 {
         let x = (i as f64).mul_add(h, 1.0e-10);
         let weight = if i == 0 || i == n {
             1.0
-        } else if i.is_multiple_of(2) {
+        } else if i % 2 == 0 {
             2.0
         } else {
             4.0
