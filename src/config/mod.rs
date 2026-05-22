@@ -654,10 +654,12 @@ const fn default_sweep_parallelism() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bench {
-    /// Warm-up iterations (excluded from timing stats).
+    /// Warm-up iterations (excluded from timing stats). May be 0.
     #[serde(default = "default_bench_warmup")]
     pub warmup: usize,
-    /// Measured iterations (included in timing stats).
+    /// Measured iterations (included in timing stats). Must be >= 1
+    /// (enforced at runtime in `bench::run`). p95 is only statistically
+    /// meaningful for `measured >= 20`; below that it tracks `max_ms`.
     #[serde(default = "default_bench_measured")]
     pub measured: usize,
 }
