@@ -51,11 +51,21 @@ impl Balda {
     /// Construct, computing `β(u)` numerically.
     #[must_use]
     pub fn new(on_site_interaction: f64, params: BaldaParams) -> Self {
+        assert!(
+            params.mott_gap_smoothing_width + params.clamp_eta <= 1.0,
+            "BaldaParams: mott_gap_smoothing_width ({}) + clamp_eta ({}) must be <= 1.0; otherwise the smoothing window reaches outside the clamped density domain",
+            params.mott_gap_smoothing_width,
+            params.clamp_eta,
+        );
         let beta_u = if on_site_interaction.abs() < 1.0e-14 {
             2.0
         } else {
             solve_beta(on_site_interaction, &params)
         };
+        debug_assert!(
+            (1.0..=2.0).contains(&beta_u),
+            "BALDA solve_beta returned beta_u outside expected range [1, 2]"
+        );
         Self {
             on_site_interaction,
             beta_u,
@@ -70,6 +80,13 @@ impl Balda {
     }
 
     fn evaluate_site(&self, n_raw: f64) -> f64 {
+        if !n_raw.is_finite() {
+            tracing::error!(
+                n_raw,
+                "non-finite site density in BALDA evaluate_site - returning NaN"
+            );
+            return f64::NAN;
+        }
         let eta = self.params.clamp_eta;
         let n = n_raw.clamp(eta, 2.0 - eta);
         let delta = self.params.mott_gap_smoothing_width;
@@ -101,12 +118,17 @@ fn upper_branch(n: f64, beta_u: f64) -> f64 {
 
 /// Solve `-2 β / π · sin(π / β) = ε_h(u)` for `β ∈ [1, 2]` by bisection.
 fn solve_beta(u: f64, params: &BaldaParams) -> f64 {
+    debug_assert!(
+        u >= 0.0,
+        "BALDA bisection bracket [1, 2] maps to f in [-4/pi, 0]; u < 0 lies outside and would silently saturate at beta = 2"
+    );
     let target = lieb_wu_integral(u, params);
     // f(β) = -2 β / π · sin(π / β) is monotone on [1, 2]:
     //   f(1) = -2/π · sin π = 0
     //   f(2) = -4/π · sin(π/2) = -4/π ≈ -1.273
     let mut lo = 1.0_f64;
     let mut hi = 2.0_f64;
+    let mut converged = false;
     for _ in 0..params.beta_max_bisect_iter {
         let mid = 0.5 * (lo + hi);
         let f_mid = -2.0 * mid / std::f64::consts::PI * (std::f64::consts::PI / mid).sin();
@@ -116,8 +138,17 @@ fn solve_beta(u: f64, params: &BaldaParams) -> f64 {
             hi = mid;
         }
         if (hi - lo) < params.beta_tol {
+            converged = true;
             break;
         }
+    }
+    if !converged {
+        tracing::warn!(
+            residual = hi - lo,
+            iters = params.beta_max_bisect_iter,
+            target,
+            "solve_beta did not converge within beta_max_bisect_iter; using mid as best estimate",
+        );
     }
     0.5 * (lo + hi)
 }
@@ -209,7 +240,8 @@ mod tests {
     #[test]
     fn mott_gap_at_half_filling_for_finite_u() {
         // The raw discontinuity V_HXC(1+) - V_HXC(1-) is the BALDA Mott
-        // gap U - 4 cos(π/β). Disable smoothing to measure it directly.
+        // gap U + 4 cos(π/β) (positive since cos(π/β) < 0 on β in (1, 2)).
+        // Disable smoothing to measure it directly.
         use std::f64::consts::PI;
         let u = 4.0;
         let params = BaldaParams {

@@ -46,5 +46,8 @@ dump_spectrum = true
 dump_partition_function = true
 overwrite = true
 
+# mott_gap_smoothing_width: widened to 0.15 from the production default (0.02)
+# because the dimer's comb perturbation requires a wider linear-blend window
+# for Pulay-mixed SCF to converge through the Mott discontinuity at n=1.
 [xc_functional.params]
 mott_gap_smoothing_width = 0.15
