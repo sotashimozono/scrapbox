@@ -1,3 +1,4 @@
+#![allow(unknown_lints, clippy::manual_is_multiple_of)]
 #![allow(clippy::doc_markdown, clippy::many_single_char_names)]
 //! Exact-diagonalization validation for the 1D L=4 open-chain Hubbard
 //! model at half-filling (N_up = N_dn = 2). The single-spin half-filled
@@ -32,7 +33,7 @@ fn enumerate_basis(l: usize, n_electrons: usize) -> Vec<u32> {
 /// post-removal mask, not the original).
 fn fermion_sign(mask: u32, site: usize) -> f64 {
     let lower = mask & ((1_u32 << site) - 1);
-    if lower.count_ones().is_multiple_of(2) {
+    if lower.count_ones() % 2 == 0 {
         1.0
     } else {
         -1.0
