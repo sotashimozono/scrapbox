@@ -1,10 +1,10 @@
 schema_version = "0.2"
 
 [meta]
-name = "dimer_validate"
-description = "Hubbard dimer fidelity regression: KS-DFT vs self-reference from v0.1 baseline."
-created = "2026-05-21"
-tags = ["smoke", "validate", "v0.1", "regression"]
+name = "dimer_lanczos"
+description = "Hubbard dimer with Lanczos spectrum source. Cross-validates Lanczos vs dense_diag pipeline on identical SCF problem."
+created = "2026-05-22"
+tags = ["v0.2", "lanczos"]
 
 [hamiltonian]
 model = "hubbard_1d_inhomogeneous"
@@ -21,7 +21,7 @@ external_potential.amplitude = 0.0
 kind = "hubbard_lda"
 
 [spectrum_source]
-kind = "dense_diag"
+kind = "lanczos"
 
 [density_evaluator]
 kind = "pratt_recursion"
@@ -34,22 +34,13 @@ mixing.alpha = 0.5
 initial_density.kind = "uniform"
 
 [observables]
-mean_work = false
-irreversible_entropy = false
 free_energy = true
 partition_function = true
 
 [output]
-directory = "runs/dimer_validate"
+directory = "runs/dimer_lanczos"
 format = "json"
 dump_density = true
 dump_spectrum = true
 dump_partition_function = true
 overwrite = true
-
-[validation]
-reference_path = "tests/references/dimer_smoke.json"
-tolerances.density = 1e-8
-tolerances.free_energy = 1e-8
-tolerances.mean_work = 1e-8
-fail_on_mismatch = true

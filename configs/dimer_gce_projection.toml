@@ -1,10 +1,10 @@
 schema_version = "0.2"
 
 [meta]
-name = "dimer_validate"
-description = "Hubbard dimer fidelity regression: KS-DFT vs self-reference from v0.1 baseline."
-created = "2026-05-21"
-tags = ["smoke", "validate", "v0.1", "regression"]
+name = "dimer_gce_projection"
+description = "Hubbard dimer with GCE+projection density evaluator. Cross-validates against Pratt recursion."
+created = "2026-05-22"
+tags = ["v0.2", "gce-projection"]
 
 [hamiltonian]
 model = "hubbard_1d_inhomogeneous"
@@ -24,7 +24,8 @@ kind = "hubbard_lda"
 kind = "dense_diag"
 
 [density_evaluator]
-kind = "pratt_recursion"
+kind = "gce_plus_projection"
+params.num_quadrature_points = 64
 
 [scf]
 max_iterations = 200
@@ -34,22 +35,13 @@ mixing.alpha = 0.5
 initial_density.kind = "uniform"
 
 [observables]
-mean_work = false
-irreversible_entropy = false
 free_energy = true
 partition_function = true
 
 [output]
-directory = "runs/dimer_validate"
+directory = "runs/dimer_gce_projection"
 format = "json"
 dump_density = true
 dump_spectrum = true
 dump_partition_function = true
 overwrite = true
-
-[validation]
-reference_path = "tests/references/dimer_smoke.json"
-tolerances.density = 1e-8
-tolerances.free_energy = 1e-8
-tolerances.mean_work = 1e-8
-fail_on_mismatch = true

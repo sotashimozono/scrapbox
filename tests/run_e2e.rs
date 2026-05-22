@@ -12,7 +12,7 @@ use scrapbox::xc::ExchangeCorrelation;
 use serde_json::Value;
 
 const DIMER_TOML: &str = r#"
-schema_version = "0.1"
+schema_version = "0.2"
 
 [meta]
 name = "dimer_e2e"
@@ -90,7 +90,7 @@ fn e2e_dimer_writes_expected_outputs() {
     // run.toml must exist and re-deserialize back into Config.
     let reloaded = std::fs::read_to_string(dir.join("run.toml")).unwrap();
     let cfg_roundtrip: Config = toml::from_str(&reloaded).unwrap();
-    assert_eq!(cfg_roundtrip.schema_version, "0.1");
+    assert_eq!(cfg_roundtrip.schema_version, "0.2");
     assert_eq!(cfg_roundtrip.meta.name, "dimer_e2e");
 
     // observables.json mirrors what we wrote.

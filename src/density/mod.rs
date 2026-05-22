@@ -1,5 +1,6 @@
 //! Layer 4 — canonical density evaluators.
 
+pub mod gce_projection;
 pub mod pratt;
 
 use crate::config::{DensityEvaluator as DensityConfig, PrattParams};
@@ -20,8 +21,10 @@ pub struct DensityResult {
 /// Dispatching enum over density-evaluator variants.
 #[derive(Debug, Clone)]
 pub enum CanonicalDensityEvaluator {
-    /// Pratt recursion.
+    /// Pratt recursion (exact for non-interacting fermions).
     PrattRecursion(pratt::PrattParamsRuntime),
+    /// Grand-canonical fugacity-circle quadrature + Fourier projection.
+    GcePlusProjection(gce_projection::GceProjectionParamsRuntime),
 }
 
 impl CanonicalDensityEvaluator {
@@ -30,6 +33,9 @@ impl CanonicalDensityEvaluator {
         match cfg {
             DensityConfig::PrattRecursion { params } => Ok(Self::PrattRecursion(
                 pratt::PrattParamsRuntime::from(params),
+            )),
+            DensityConfig::GcePlusProjection { params } => Ok(Self::GcePlusProjection(
+                gce_projection::GceProjectionParamsRuntime::from(params),
             )),
         }
     }
@@ -50,6 +56,9 @@ impl CanonicalDensityEvaluator {
         match self {
             Self::PrattRecursion(params) => {
                 pratt::evaluate(eigen, num_electrons_per_spin, beta, params)
+            }
+            Self::GcePlusProjection(params) => {
+                gce_projection::evaluate(eigen, num_electrons_per_spin, beta, params)
             }
         }
     }

@@ -27,7 +27,7 @@ fn every_sample_config_parses() {
             .unwrap_or_else(|e| panic!("config {} failed: {e}", path.display()));
         assert_eq!(
             cfg.schema_version,
-            "0.1",
+            "0.2",
             "{} schema_version drift",
             path.display()
         );

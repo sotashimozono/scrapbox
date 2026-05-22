@@ -29,6 +29,7 @@
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
 
+pub mod bin_support;
 pub mod config;
 pub mod density;
 pub mod error;
@@ -38,6 +39,7 @@ pub mod output;
 pub mod quench;
 pub mod scf;
 pub mod spectrum;
+pub mod sweep;
 pub mod validation;
 pub mod xc;
 
