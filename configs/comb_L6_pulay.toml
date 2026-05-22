@@ -42,6 +42,8 @@ final_external_potential.amplitude = 4.5
 [observables]
 mean_work = true
 irreversible_entropy = true
+work_variance = true
+theta_2.method = "zero"
 free_energy = true
 partition_function = true
 

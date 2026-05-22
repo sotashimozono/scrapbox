@@ -3,10 +3,10 @@
 //! Subcommands (per `notes/discipline/HARNESS.md`):
 //!
 //! - `run <config>`      single SCF calculation + dump
-//! - `validate <config>` `run` + reference-dataset comparison       (Batch 8)
-//! - `sweep <config>`    cartesian-product over `[sweep].axes`      (Batch 8+)
-//! - `bench <config>`    `run` + wall-clock timing                  (Batch 8+)
-//! - `doctor <config>`   parse + dispatch only                      (Batch 8+)
+//! - `validate <config>` `run` + reference-dataset comparison
+//! - `sweep <config>`    cartesian-product over `[sweep].axes`      (Batch 15)
+//! - `bench <config>`    `run` + wall-clock timing                  (later)
+//! - `doctor <config>`   parse + dispatch only                      (later)
 
 use scrapbox::config::{Config, Quench};
 use scrapbox::density::CanonicalDensityEvaluator;
@@ -30,10 +30,10 @@ USAGE:
 
 SUBCOMMANDS:
     run         Single calculation (SCF + observables + dump)
-    validate    `run` + reference-dataset comparison (Batch 8)
-    sweep       Cartesian-product parameter grid (Batch 8+)
-    bench       `run` + wall-clock timing (Batch 8+)
-    doctor      Parse + dispatch only (Batch 8+)
+    validate    `run` + reference-dataset comparison
+    sweep       Cartesian-product parameter grid (v0.2)
+    bench       `run` + wall-clock timing (later)
+    doctor      Parse + dispatch only (later)
 
 See notes/discipline/HARNESS.md for the full design.
 ";
@@ -58,11 +58,12 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
-        "sweep" | "bench" | "doctor" => match Config::from_file(config_path) {
+        "sweep" => dispatch(sweep_subcommand(config_path)),
+        "bench" | "doctor" => match Config::from_file(config_path) {
             Ok(cfg) => {
                 eprintln!(
                     "scrapbox {subcommand}: parsed config '{name}' \
-                     (subcommand body lands in Batch 8 — see PHASES.md).",
+                     (subcommand body not implemented yet).",
                     name = cfg.meta.name
                 );
                 ExitCode::from(2)
@@ -114,6 +115,37 @@ fn run_initial_solve(cfg: &Config) -> Result<scrapbox::scf::KsState> {
     solver.solve()
 }
 
+/// Finite-difference susceptibility `χ_ij = ∂n_i / ∂V_j` at the supplied
+/// base potential, using central differences with step `epsilon`.
+/// Returns a `num_sites × num_sites` row-major matrix.
+fn susceptibility_finite_difference(
+    cfg: &Config,
+    base_potential: &[f64],
+    epsilon: f64,
+) -> Result<Vec<Vec<f64>>> {
+    use scrapbox::config::ExternalPotential;
+    let n = cfg.hamiltonian.num_sites;
+    let mut chi = vec![vec![0.0_f64; n]; n];
+    for j in 0..n {
+        let mut v_plus = base_potential.to_vec();
+        v_plus[j] += epsilon;
+        let mut v_minus = base_potential.to_vec();
+        v_minus[j] -= epsilon;
+        let mut cfg_plus = cfg.clone();
+        cfg_plus.hamiltonian.external_potential = ExternalPotential::Explicit { values: v_plus };
+        cfg_plus.quench = None;
+        let mut cfg_minus = cfg.clone();
+        cfg_minus.hamiltonian.external_potential = ExternalPotential::Explicit { values: v_minus };
+        cfg_minus.quench = None;
+        let ks_plus = run_initial_solve(&cfg_plus)?;
+        let ks_minus = run_initial_solve(&cfg_minus)?;
+        for i in 0..n {
+            chi[i][j] = (ks_plus.densities[i] - ks_minus.densities[i]) / (2.0 * epsilon);
+        }
+    }
+    Ok(chi)
+}
+
 fn compute_observables(
     cfg: &Config,
     ks_state: &scrapbox::scf::KsState,
@@ -126,51 +158,106 @@ fn compute_observables(
         report.partition_function = Some(ks_state.partition_function);
     }
 
-    if cfg.observables.mean_work || cfg.observables.irreversible_entropy {
-        let Some(Quench::Sudden {
-            final_external_potential,
-        }) = cfg.quench.clone()
-        else {
-            return Err(ScrapboxError::ConfigValidation {
-                message: "[observables] requested mean_work / irreversible_entropy but \
-                          no [quench] section is present"
+    let want_quench_obs = cfg.observables.mean_work
+        || cfg.observables.irreversible_entropy
+        || cfg.observables.work_variance;
+    if !want_quench_obs {
+        return Ok(report);
+    }
+
+    let Some(Quench::Sudden {
+        final_external_potential,
+    }) = cfg.quench.clone()
+    else {
+        return Err(ScrapboxError::ConfigValidation {
+            message:
+                "[observables] requested mean_work / irreversible_entropy / work_variance but \
+                 no [quench] section is present"
                     .into(),
-            });
+        });
+    };
+
+    let mut cfg_final = cfg.clone();
+    cfg_final.hamiltonian.external_potential = final_external_potential;
+    cfg_final.quench = None;
+    cfg_final.observables.mean_work = false;
+    cfg_final.observables.irreversible_entropy = false;
+    cfg_final.observables.work_variance = false;
+    let ks_final = run_initial_solve(&cfg_final)?;
+
+    let initial_potential = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let final_potential = cfg_final
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg_final.hamiltonian.num_sites);
+    let beta = cfg.hamiltonian.beta;
+    let evaluator = scrapbox::quench::SuddenQuenchEvaluator::new(
+        initial_potential.clone(),
+        final_potential.clone(),
+        beta,
+    );
+    let mean_work = evaluator.mean_work(&ks_state.densities);
+    let s_irr =
+        evaluator.irreversible_entropy(mean_work, ks_state.free_energy, ks_final.free_energy);
+
+    if cfg.observables.mean_work {
+        report.mean_work = Some(mean_work);
+    }
+    if cfg.observables.irreversible_entropy {
+        report.irreversible_entropy = Some(s_irr);
+    }
+
+    if cfg.observables.work_variance {
+        let epsilon = 1e-4;
+        let chi = susceptibility_finite_difference(cfg, &initial_potential, epsilon)?;
+
+        let delta: Vec<f64> = initial_potential
+            .iter()
+            .zip(final_potential.iter())
+            .map(|(v0, vf)| vf - v0)
+            .collect();
+
+        // <W²>_c = <W>² - (1/β) Σ_ij δλ_i δλ_j χ_ij
+        let mut quad = 0.0_f64;
+        for i in 0..delta.len() {
+            for j in 0..delta.len() {
+                quad += delta[i] * chi[i][j] * delta[j];
+            }
+        }
+        let mean_w_sq_c = mean_work.mul_add(mean_work, -quad / beta);
+
+        let theta_2 = match cfg.observables.theta_2.method.as_str() {
+            "zero" => 0.0,
+            "lda" => {
+                return Err(ScrapboxError::ConfigValidation {
+                    message: "[observables].theta_2.method = \"lda\" requires a Bethe-ansatz \
+                              homogeneous reference and is gated to v0.3+ (see PHASES.md). \
+                              Use \"zero\" until BALDA lands."
+                        .into(),
+                });
+            }
+            other => {
+                return Err(ScrapboxError::ConfigValidation {
+                    message: format!(
+                        "[observables].theta_2.method = {other:?} is not a recognized value \
+                         (supported: \"zero\")"
+                    ),
+                });
+            }
         };
 
-        // Solve the post-quench Hamiltonian (same model, swapped external potential).
-        let mut cfg_final = cfg.clone();
-        cfg_final.hamiltonian.external_potential = final_external_potential;
-        cfg_final.quench = None;
-        cfg_final.observables.mean_work = false;
-        cfg_final.observables.irreversible_entropy = false;
-        let ks_final = run_initial_solve(&cfg_final)?;
+        let mean_w_sq = mean_w_sq_c + theta_2;
+        let sigma_w_sq = mean_work.mul_add(-mean_work, mean_w_sq);
+        let fdr_pred = (0.5 * beta * beta).mul_add(sigma_w_sq - theta_2, 0.0);
+        let fdr_residual = s_irr - fdr_pred;
 
-        let initial_potential = cfg
-            .hamiltonian
-            .external_potential
-            .to_site_values(cfg.hamiltonian.num_sites);
-        let final_potential = cfg_final
-            .hamiltonian
-            .external_potential
-            .to_site_values(cfg_final.hamiltonian.num_sites);
-        let evaluator = scrapbox::quench::SuddenQuenchEvaluator::new(
-            initial_potential,
-            final_potential,
-            cfg.hamiltonian.beta,
-        );
-        let mean_work = evaluator.mean_work(&ks_state.densities);
-        if cfg.observables.mean_work {
-            report.mean_work = Some(mean_work);
-        }
-        if cfg.observables.irreversible_entropy {
-            let s_irr = evaluator.irreversible_entropy(
-                mean_work,
-                ks_state.free_energy,
-                ks_final.free_energy,
-            );
-            report.irreversible_entropy = Some(s_irr);
-        }
+        report.mean_work_sq = Some(mean_w_sq);
+        report.work_variance = Some(sigma_w_sq);
+        report.theta_2 = Some(theta_2);
+        report.fdr_residual = Some(fdr_residual);
     }
 
     Ok(report)
@@ -192,7 +279,7 @@ fn validate_subcommand(config_path: &str) -> Result<bool> {
             .as_ref()
             .ok_or_else(|| ScrapboxError::ConfigValidation {
                 message: "[validation] section required for `scrapbox validate` (set tolerances + \
-                  reference_path or use `scrapbox run`)"
+                      reference_path or use `scrapbox run`)"
                     .into(),
             })?;
     let reference = ReferenceDataset::from_file(&validation_cfg.reference_path)?;
@@ -207,7 +294,6 @@ fn validate_subcommand(config_path: &str) -> Result<bool> {
         validation_cfg,
     )?;
 
-    // Dump the per-observable report into the output dir.
     let report_path = out_dir.join("validation_report.json");
     let file = std::fs::File::create(&report_path).map_err(|source| ScrapboxError::Artifact {
         path: report_path.clone(),
@@ -233,4 +319,9 @@ fn validate_subcommand(config_path: &str) -> Result<bool> {
 
     eprintln!("scrapbox validate: PASS → {dir}", dir = out_dir.display());
     Ok(true)
+}
+
+fn sweep_subcommand(config_path: &str) -> Result<()> {
+    let cfg = Config::from_file(config_path)?;
+    scrapbox::sweep::run(&cfg)
 }

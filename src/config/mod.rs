@@ -386,12 +386,35 @@ pub struct Observables {
     /// Compute `<S_irr> = β(<W> − ΔF)` (requires `[quench]`).
     #[serde(default)]
     pub irreversible_entropy: bool,
+    /// Compute the second moment `<W²>` and variance `σ_w²` of the
+    /// sudden-quench work distribution (Palamara 2024 eq 28).
+    /// Requires `[quench]`.
+    #[serde(default)]
+    pub work_variance: bool,
+    /// Quantum correction `Θ_2` (Palamara 2024 eq 30) needed when the
+    /// pre- and post-quench Hamiltonians do not commute.
+    #[serde(default)]
+    pub theta_2: Theta2Spec,
     /// Dump `F = -β⁻¹ ln Z_N`.
     #[serde(default = "default_true")]
     pub free_energy: bool,
     /// Dump the per-spin canonical partition function.
     #[serde(default = "default_true")]
     pub partition_function: bool,
+}
+
+/// How to estimate `Θ_2` per Palamara 2024 §IV.1.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Theta2Spec {
+    /// `zero` (default — neglect) or `lda` (requires a homogeneous-
+    /// system reference; lands fully in v0.3 once BALDA is wired).
+    #[serde(default = "default_theta_2_method")]
+    pub method: String,
+}
+
+fn default_theta_2_method() -> String {
+    "zero".to_string()
 }
 
 // ─── Output ────────────────────────────────────────────────────────────

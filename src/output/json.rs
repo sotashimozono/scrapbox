@@ -192,6 +192,7 @@ mod tests {
             partition_function: Some(0.25),
             mean_work: None,
             irreversible_entropy: None,
+            ..ObservableReport::default()
         };
         let cfg = default_output_cfg(dir.to_str().unwrap());
         write(&dir, &state, &obs, &cfg).unwrap();

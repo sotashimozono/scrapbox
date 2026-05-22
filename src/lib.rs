@@ -38,6 +38,7 @@ pub mod output;
 pub mod quench;
 pub mod scf;
 pub mod spectrum;
+pub mod sweep;
 pub mod validation;
 pub mod xc;
 
