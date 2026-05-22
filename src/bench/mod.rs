@@ -1,3 +1,4 @@
+#![allow(unknown_lints, clippy::manual_is_multiple_of)]
 #![allow(
     clippy::similar_names,
     clippy::cast_sign_loss,
@@ -107,7 +108,7 @@ fn summarize(samples_ms: &[f64]) -> Stats {
     let n = sorted.len();
     let min_ms = sorted[0];
     let max_ms = sorted[n - 1];
-    let median_ms = if n.is_multiple_of(2) {
+    let median_ms = if n % 2 == 0 {
         0.5 * (sorted[n / 2 - 1] + sorted[n / 2])
     } else {
         sorted[n / 2]
