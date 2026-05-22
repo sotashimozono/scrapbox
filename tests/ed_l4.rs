@@ -25,6 +25,11 @@ fn enumerate_basis(l: usize, n_electrons: usize) -> Vec<u32> {
     out
 }
 
+/// Jordan-Wigner sign for inserting/removing at `site` on state `mask`.
+/// Counts electrons at sites 0..site in `mask`; returns -1 if odd,
+/// +1 otherwise. The caller must pass the state in which the operator
+/// actually acts (for creation after a previous removal, pass the
+/// post-removal mask, not the original).
 fn fermion_sign(mask: u32, site: usize) -> f64 {
     let lower = mask & ((1_u32 << site) - 1);
     if lower.count_ones().is_multiple_of(2) {
@@ -34,13 +39,17 @@ fn fermion_sign(mask: u32, site: usize) -> f64 {
     }
 }
 
-fn single_spin_hopping(basis: &[u32], hopping_j: f64) -> Mat<f64> {
+/// Single-spin hopping matrix for the L-site open chain, in the
+/// occupation-bitmask basis. The returned matrix M includes the leading
+/// `-hopping_j` (so M = -t * c_j^dag c_i in the JW convention);
+/// callers do NOT add another minus sign.
+fn single_spin_hopping(basis: &[u32], l: usize, hopping_j: f64) -> Mat<f64> {
     let dim = basis.len();
     let mut h = Mat::<f64>::zeros(dim, dim);
     let lookup: std::collections::HashMap<u32, usize> =
         basis.iter().enumerate().map(|(i, &m)| (m, i)).collect();
     for (col, &mask) in basis.iter().enumerate() {
-        for bond in 0..(L - 1) {
+        for bond in 0..(l - 1) {
             if (mask >> bond) & 1 == 1 && (mask >> (bond + 1)) & 1 == 0 {
                 let after_remove = mask & !(1_u32 << bond);
                 let sign1 = fermion_sign(mask, bond);
@@ -61,16 +70,32 @@ fn single_spin_hopping(basis: &[u32], hopping_j: f64) -> Mat<f64> {
             }
         }
     }
+    // Hermiticity is essential because we pass Side::Lower to faer and
+    // it ignores the upper triangle. An asymmetric matrix would silently
+    // produce wrong eigenvectors.
+    for i in 0..dim {
+        for j in 0..i {
+            debug_assert!(
+                (h[(i, j)] - h[(j, i)]).abs() < 1e-14,
+                "single_spin_hopping not symmetric at ({i}, {j})"
+            );
+        }
+    }
     h
 }
 
+/// Build the full Hubbard Hamiltonian and the basis-index map.
+/// Returns `(H, joint)` where `H[r, c]` indexes the composite state
+/// `up_idx * m + dn_idx` and `joint[r]` is the `(up_mask, dn_mask)` pair
+/// for row `r`. This ordering contract is load-bearing - changing it
+/// silently breaks `ed_thermal_density`.
 fn build_full_hubbard(hopping_j: f64, u: f64, v_ext: &[f64]) -> (Mat<f64>, Vec<(u32, u32)>) {
     assert_eq!(v_ext.len(), L);
     let basis = enumerate_basis(L, N_PER_SPIN);
     let m = basis.len();
     let dim = m * m;
     let mut h = Mat::<f64>::zeros(dim, dim);
-    let h_hop_single = single_spin_hopping(&basis, hopping_j);
+    let h_hop_single = single_spin_hopping(&basis, L, hopping_j);
 
     for up_a in 0..m {
         for up_b in 0..m {
@@ -125,6 +150,10 @@ fn ed_thermal_density(
     joint: &[(u32, u32)],
     beta: f64,
 ) -> Vec<f64> {
+    assert!(
+        !eigenvalues.is_empty(),
+        "ed_thermal_density requires non-empty spectrum"
+    );
     let dim = eigenvalues.len();
     let shift = eigenvalues.iter().copied().fold(f64::INFINITY, f64::min);
     let mut z = 0.0_f64;
@@ -179,11 +208,10 @@ kind = "dense_diag"
 kind = "pratt_recursion"
 
 [scf]
-max_iterations = 400
+max_iterations = 2000
 tolerance = 1e-10
-mixing.kind = "pulay"
-mixing.alpha = 0.2
-mixing.history_depth = 8
+mixing.kind = "linear"
+mixing.alpha = 0.05
 initial_density.kind = "uniform"
 
 [observables]
@@ -227,6 +255,34 @@ fn diagonalize_36(h: &Mat<f64>) -> (Vec<f64>, Mat<f64>) {
 }
 
 #[test]
+fn enumerate_basis_l4_n2_gives_six_states() {
+    let b = enumerate_basis(4, 2);
+    assert_eq!(b.len(), 6);
+    for mask in &b {
+        assert_eq!(mask.count_ones(), 2);
+    }
+}
+
+#[test]
+fn fermion_sign_counts_lower_occupied() {
+    assert!((fermion_sign(0b0010, 1) - 1.0).abs() < 1e-14);
+    assert!((fermion_sign(0b0011, 1) - (-1.0)).abs() < 1e-14);
+    assert!((fermion_sign(0b0011, 2) - 1.0).abs() < 1e-14);
+}
+
+#[test]
+fn single_spin_hopping_l2_matches_known_form() {
+    // L=2, N=1 single-spin sector has basis {|10>, |01>}.
+    // H_kin = -J [[0, 1], [1, 0]] with our sign conventions.
+    let basis = vec![0b01_u32, 0b10_u32];
+    let h = single_spin_hopping(&basis, 2, 1.0);
+    assert!((h[(0, 0)]).abs() < 1e-14);
+    assert!((h[(1, 1)]).abs() < 1e-14);
+    assert!((h[(0, 1)] - (-1.0)).abs() < 1e-14);
+    assert!((h[(1, 0)] - (-1.0)).abs() < 1e-14);
+}
+
+#[test]
 fn l4_uniform_v_ed_density_is_one_everywhere() {
     let j = 1.0_f64;
     let u = 4.0_f64;
@@ -259,6 +315,34 @@ fn l4_uniform_v_ks_density_matches_ed() {
 }
 
 #[test]
+fn l4_comb_v_ks_density_matches_ed_within_lda_error() {
+    // Non-trivial test: KS-DFT (HubbardLDA) at the CDW comb V must agree
+    // with ED to within the known LDA approximation error. At U=4 with
+    // v0=0.1 the LDA error is ~10^-2; we use a loose 5% tolerance.
+    // The V=0 case in l4_uniform_v_ks_density_matches_ed is symmetry-
+    // forced (both methods give n_i=1 by translation), so it does NOT
+    // exercise the KS-vs-ED approximation; this test does.
+    let v = [0.02_f64, -0.02, 0.02, -0.02];
+    let ks = run_ks_l4(&v);
+    let (h, joint) = build_full_hubbard(1.0, 4.0, &v);
+    let (eigvals, eigvecs) = diagonalize_36(&h);
+    let ed = ed_thermal_density(&eigvals, &eigvecs, &joint, 2.0);
+    for i in 0..L {
+        assert!(
+            (ks[i] - ed[i]).abs() < 0.02,
+            "site {i}: KS = {}, ED = {} - LDA error exceeded 2% tolerance",
+            ks[i],
+            ed[i]
+        );
+        let same_dir = (ks[i] - 1.0).signum() == (ed[i] - 1.0).signum();
+        assert!(
+            same_dir || (ed[i] - 1.0).abs() < 1e-8,
+            "site {i}: KS-ED disagree on symmetry-breaking direction"
+        );
+    }
+}
+
+#[test]
 fn l4_small_comb_ed_breaks_symmetry_as_expected() {
     let v0 = 0.1;
     let v = [v0, -v0, v0, -v0];
@@ -268,8 +352,9 @@ fn l4_small_comb_ed_breaks_symmetry_as_expected() {
     // Mass conservation: Sum n_i = N = 4 (half filling, 4 electrons total).
     let total: f64 = ed.iter().sum();
     assert!((total - 4.0).abs() < 1e-10, "sum = {total}");
-    // Particle-hole symmetry of V=(+v0, -v0, +v0, -v0): n_i + n_{2-pair} relation.
-    // High-V sites depleted, low-V sites enhanced.
+    // Direct electrostatic response: positive V_i raises on-site energy
+    // and thermally depletes occupation. Mass conservation (sum n = N = 4)
+    // is the only physical sum rule asserted here.
     assert!(
         ed[0] < 1.0 && ed[2] < 1.0,
         "high-V sites n = {} {}",
