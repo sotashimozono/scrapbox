@@ -8,9 +8,11 @@ gate cross-referenced to the CHANGELOG entries that satisfied it.
 
 ## What v0.3 adds over v0.2
 
-- **BALDA xc functional** (Lima, Silva, Capelle PRL 90, 146402, 2003).
+- **BALDA xc functional** (Lima, Silva, Capelle, PRL 90, 146402 (2003)).
   Solves β(u) via the Lieb-Wu Bethe-ansatz integral identity, builds
-  `V_HXC^BALDA(n)` piecewise across n = 1 with optional Mott-gap
+  `V_HXC^BALDA(n)` piecewise across n = 1 (closed form `2[cos(pi*n/2) - cos(pi*n/beta)]`
+  for n <= 1; particle-hole mirror + Hartree shift `+U` for n > 1; gap
+  `U + 4*cos(pi/beta)`) and optional Mott-gap
   smoothing for SCF convergence on inhomogeneous configs.
 - **Parallel sweep workers**. `[sweep].parallelism > 1` now dispatches
   per-cell solves through a `rayon::ThreadPoolBuilder`. Output dirs
@@ -42,6 +44,7 @@ params.mott_gap_smoothing_width = δ   # BALDA only, default 0.02
 params.lieb_simpson_intervals   = N   # BALDA only, default 4096
 params.beta_max_bisect_iter     = N   # BALDA only, default 80
 params.beta_tol                 = ε   # BALDA only, default 1e-13
+params.clamp_eta                = ε   # BALDA only, default 1e-14 (n clamp)
 
 [sweep]
 parallelism = N                       # any usize >= 1
@@ -57,20 +60,25 @@ layer (only adds new optional sections and variants).
 ## Acceptance gates
 
 - **§2.1 — BALDA xc dispatches and converges**:
-  Batch 17 (`7b4773a`). 9 lib tests + dimer E2E with Pulay mixing.
+  Batch 17. 9 lib tests + dimer E2E with Pulay mixing.
 - **§2.2 — Parallel sweep produces N cells with shared semantics**:
-  Batch 18 (`ba84ccc`). 8 U-axis cells × parallelism = 4.
+  Batch 18. 8 U-axis cells × parallelism = 4.
 - **§2.3 — Independent ED at L=4**:
-  Batch 19 (`e14dc91`). 36×36 ED matches KS-DFT density at uniform V
-  to 1e-10; CDW response symmetry confirmed.
+  Batch 19. The 36x36 ED at uniform V reproduces the symmetric half-
+  filled density (KS-DFT agrees by symmetry, asserted to 1e-10). A
+  non-trivial KS-vs-ED comparison at comb V = (+0.02, -0.02, ...)
+  asserts agreement within the HubbardLDA error budget (2% tolerance).
+  ED at the same comb potential breaks symmetry as expected.
 - **§2.4 — `scrapbox bench` emits JSON timing**:
-  Batch 20 (`8397899`). `min <= median <= p95` invariant verified.
+  Batch 20. `min <= median <= p95` invariant verified.
 - **§2.5 — `scrapbox doctor` validates without SCF**:
-  Batch 21 (`cde9e88`). Parses + constructs every layer, emits report.
+  Batch 21. Parses + constructs every layer, emits report.
 
 ## Tests at tag time
 
-- **63 unit + 16 integration = 79 tests**, all green.
+*(Snapshot — will rot as PRs land. Authoritative source: .)*
+
+- **65 unit + 18 integration = 83 tests**, all green (post-fix totals).
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   clean (pedantic + nursery, with file-scoped allows for `similar_names`
   in physics-naming-heavy modules and for `cast_*` lints in the
