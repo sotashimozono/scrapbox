@@ -50,7 +50,7 @@ fn tampered_reference_density_fails() {
     let (observables, _density, cfg) = run_dimer();
     let validation_cfg = cfg.validation.as_ref().unwrap();
     let reference = ReferenceDataset {
-        schema_version: "0.1".into(),
+        schema_version: "0.2".into(),
         produced_by: "tampered".into(),
         observables: ObservableReport::default(),
         site_density: Some(vec![0.5, 1.5]),

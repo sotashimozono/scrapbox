@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// `schema_version` value this build supports.
-pub const SUPPORTED_SCHEMA_VERSION: &str = "0.1";
+pub const SUPPORTED_SCHEMA_VERSION: &str = "0.2";
 
 /// Top-level `config.toml` deserialization target.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +331,21 @@ pub enum Mixing {
         /// Mixing fraction `α ∈ (0, 1]`.
         alpha: f64,
     },
+    /// Pulay / DIIS extrapolation over the last `history_depth` density
+    /// residuals. Falls back to linear mixing until the history is filled.
+    /// See `notes/Zettelkasten/PermanentNote/canonical-ks-construction.md`
+    /// "Failure modes / where typicality enters" §2 for context.
+    Pulay {
+        /// Mixing fraction applied to the residual when extrapolating.
+        alpha: f64,
+        /// Number of past (density, residual) pairs to retain. Typical: 6-8.
+        #[serde(default = "default_pulay_history_depth")]
+        history_depth: usize,
+    },
+}
+
+const fn default_pulay_history_depth() -> usize {
+    8
 }
 
 /// Initial-density specification for the SCF loop.
@@ -486,7 +501,7 @@ mod tests {
     use super::*;
 
     const FULL_DIMER_TOML: &str = r#"
-schema_version = "0.1"
+schema_version = "0.2"
 
 [meta]
 name = "dimer_smoke"
@@ -531,7 +546,7 @@ format = "json"
     #[test]
     fn parses_full_dimer_config() {
         let cfg = Config::from_toml_str(FULL_DIMER_TOML).expect("should parse");
-        assert_eq!(cfg.schema_version, "0.1");
+        assert_eq!(cfg.schema_version, "0.2");
         assert_eq!(cfg.meta.name, "dimer_smoke");
         assert!(matches!(cfg.xc_functional, XcFunctional::HubbardLda { .. }));
         assert!(matches!(cfg.spectrum_source, SpectrumSource::DenseDiag));
@@ -575,7 +590,7 @@ format = "json"
 
     #[test]
     fn rejects_schema_version_mismatch() {
-        let raw = FULL_DIMER_TOML.replace("\"0.1\"", "\"0.99\"");
+        let raw = FULL_DIMER_TOML.replace("\"0.2\"", "\"0.99\"");
         let err = Config::from_toml_str(&raw).expect_err("must reject");
         assert!(matches!(err, ScrapboxError::SchemaVersionMismatch { .. }));
     }

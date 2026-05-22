@@ -1,5 +1,5 @@
 {
-  "schema_version": "0.1",
+  "schema_version": "0.2",
   "produced_by": "scrapbox_v0.1_self_reference",
   "observables": {
     "free_energy": -2.0181499279178107,
