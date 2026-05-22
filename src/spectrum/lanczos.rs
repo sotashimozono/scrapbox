@@ -31,6 +31,7 @@ pub struct LanczosParams {
 
 /// Run Lanczos on a real-symmetric `n × n` matrix and return the Ritz
 /// pairs sorted ascending by eigenvalue.
+#[allow(clippy::too_many_lines)]
 pub fn diagonalize(matrix: &Mat<f64>, params: &LanczosParams) -> Result<Eigendecomposition> {
     assert_eq!(
         matrix.nrows(),
