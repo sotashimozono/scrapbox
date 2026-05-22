@@ -33,6 +33,7 @@ pub mod bench;
 pub mod bin_support;
 pub mod config;
 pub mod density;
+pub mod doctor;
 pub mod error;
 pub mod hamiltonian;
 pub mod observables;
