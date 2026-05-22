@@ -29,12 +29,9 @@ pub fn run(config_path: &Path) -> Result<()> {
             message: "[sweep].axes must be non-empty".into(),
         });
     }
-    if sweep.parallelism != 1 {
+    if sweep.parallelism == 0 {
         return Err(ScrapboxError::ConfigValidation {
-            message: format!(
-                "[sweep].parallelism = {} not yet supported (only 1 — sequential)",
-                sweep.parallelism
-            ),
+            message: "[sweep].parallelism must be >= 1".into(),
         });
     }
 
@@ -51,35 +48,63 @@ pub fn run(config_path: &Path) -> Result<()> {
         sweep.axes.len()
     );
 
-    for (cell_idx, cell) in cells.iter().enumerate() {
-        let mut patched = base_table.clone();
-        for (axis_idx, &value_idx) in cell.iter().enumerate() {
-            let axis = &sweep.axes[axis_idx];
-            let value = axis.values[value_idx];
-            set_dotted_key(&mut patched, &axis.key, toml::Value::Float(value))?;
+    let cell_configs: Vec<(usize, String, String, Config)> = cells
+        .iter()
+        .enumerate()
+        .map(|(idx, cell)| -> Result<(usize, String, String, Config)> {
+            let mut patched = base_table.clone();
+            for (axis_idx, &value_idx) in cell.iter().enumerate() {
+                let axis = &sweep.axes[axis_idx];
+                let value = axis.values[value_idx];
+                set_dotted_key(&mut patched, &axis.key, toml::Value::Float(value))?;
+            }
+            let subdir = render_subdir(&sweep.subdir_template, &sweep.axes, cell)?;
+            set_dotted_key(
+                &mut patched,
+                "output.directory",
+                toml::Value::String(subdir.clone()),
+            )?;
+            let patched_str =
+                toml::to_string(&patched).map_err(|e| ScrapboxError::ConfigValidation {
+                    message: format!("re-serialize of patched sweep cell failed: {e}"),
+                })?;
+            let cell_cfg = Config::from_toml_str(&patched_str)?;
+            Ok((idx, cell_summary(&sweep.axes, cell), subdir, cell_cfg))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let total = cell_configs.len();
+    if sweep.parallelism == 1 {
+        for (idx, summary, subdir, cfg) in cell_configs {
+            eprintln!("  cell {}/{}: {} -> {}", idx + 1, total, summary, subdir);
+            bin_support::solve_and_write(&cfg)?;
         }
-
-        let subdir = render_subdir(&sweep.subdir_template, &sweep.axes, cell)?;
-        set_dotted_key(
-            &mut patched,
-            "output.directory",
-            toml::Value::String(subdir.clone()),
-        )?;
-
-        let patched_str =
-            toml::to_string(&patched).map_err(|e| ScrapboxError::ConfigValidation {
-                message: format!("re-serialize of patched sweep cell failed: {e}"),
+    } else {
+        use rayon::prelude::*;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(sweep.parallelism)
+            .build()
+            .map_err(|e| ScrapboxError::ConfigValidation {
+                message: format!("rayon thread pool build failed: {e}"),
             })?;
-        let cell_cfg = Config::from_toml_str(&patched_str)?;
-
-        eprintln!(
-            "  cell {}/{}: {} -> {}",
-            cell_idx + 1,
-            cells.len(),
-            cell_summary(&sweep.axes, cell),
-            subdir
-        );
-        bin_support::solve_and_write(&cell_cfg)?;
+        let results: Vec<Result<()>> = pool.install(|| {
+            cell_configs
+                .par_iter()
+                .map(|(idx, summary, subdir, cfg)| {
+                    eprintln!(
+                        "  cell {}/{}: {} -> {} (parallel)",
+                        idx + 1,
+                        total,
+                        summary,
+                        subdir
+                    );
+                    bin_support::solve_and_write(cfg)
+                })
+                .collect()
+        });
+        for r in results {
+            r?;
+        }
     }
     Ok(())
 }
