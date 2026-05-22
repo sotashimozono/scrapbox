@@ -29,6 +29,7 @@
 #![warn(missing_docs)]
 #![deny(unsafe_code)]
 
+pub mod bench;
 pub mod bin_support;
 pub mod config;
 pub mod density;

@@ -47,6 +47,9 @@ pub struct Config {
     /// Parameter grid — optional, drives `scrapbox sweep`.
     #[serde(default)]
     pub sweep: Option<Sweep>,
+    /// Wall-clock benchmark spec — optional, drives `scrapbox bench`.
+    #[serde(default)]
+    pub bench: Option<Bench>,
 }
 
 impl Config {
@@ -643,6 +646,37 @@ impl SweepAxis {
 
 const fn default_sweep_parallelism() -> usize {
     1
+}
+
+// ─── Bench ─────────────────────────────────────────────────────────────
+
+/// Wall-clock benchmark spec for `scrapbox bench`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bench {
+    /// Warm-up iterations (excluded from timing stats).
+    #[serde(default = "default_bench_warmup")]
+    pub warmup: usize,
+    /// Measured iterations (included in timing stats).
+    #[serde(default = "default_bench_measured")]
+    pub measured: usize,
+}
+
+impl Default for Bench {
+    fn default() -> Self {
+        Self {
+            warmup: default_bench_warmup(),
+            measured: default_bench_measured(),
+        }
+    }
+}
+
+const fn default_bench_warmup() -> usize {
+    1
+}
+
+const fn default_bench_measured() -> usize {
+    5
 }
 
 #[cfg(test)]

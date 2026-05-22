@@ -52,7 +52,8 @@ fn main() -> ExitCode {
             }
         },
         "sweep" => dispatch(sweep_subcommand(config_path)),
-        "bench" | "doctor" => match Config::from_file(config_path) {
+        "bench" => dispatch(bench_subcommand(config_path)),
+        "doctor" => match Config::from_file(config_path) {
             Ok(cfg) => {
                 eprintln!(
                     "scrapbox {subcommand}: parsed config '{name}' \
@@ -142,4 +143,8 @@ fn validate_subcommand(config_path: &str) -> Result<bool> {
 
 fn sweep_subcommand(config_path: &str) -> Result<()> {
     scrapbox::sweep::run(std::path::Path::new(config_path))
+}
+
+fn bench_subcommand(config_path: &str) -> Result<()> {
+    scrapbox::bench::run(std::path::Path::new(config_path))
 }
