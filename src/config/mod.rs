@@ -269,6 +269,26 @@ const fn default_clamp_eta() -> f64 {
 pub enum SpectrumSource {
     /// Dense LAPACK-style eigendecomposition via `faer`.
     DenseDiag,
+    /// Lanczos tridiagonalization with optional Krylov truncation.
+    Lanczos {
+        /// Krylov subspace dimension. `None` (omitted) = full (`= n`).
+        #[serde(default)]
+        krylov_dim: Option<usize>,
+        /// Hard cap on iterations.
+        #[serde(default = "default_lanczos_max_iter")]
+        max_iter: usize,
+        /// Invariant-subspace termination threshold.
+        #[serde(default = "default_lanczos_tol")]
+        tol: f64,
+    },
+}
+
+const fn default_lanczos_max_iter() -> usize {
+    256
+}
+
+const fn default_lanczos_tol() -> f64 {
+    1.0e-12
 }
 
 // ─── DensityEvaluator ──────────────────────────────────────────────────
