@@ -6,6 +6,8 @@
 mul = 'mul'   # used in mul_add / linear-algebra identifiers
 nd   = 'nd'   # ndarray / nd-matrix prefixes
 BA   = 'BA'   # Bethe-ansatz prefix in e_BA, V_HXC^BALDA
+exatc = 'exatc'  # intentional typo fixture for parse-time rejection tests
+Numer = 'Numer'  # SIAM J. Numer. Anal. journal abbreviation in citations
 
 [default.extend-identifiers]
 # Author / scientist surnames that appear throughout the corpus.
