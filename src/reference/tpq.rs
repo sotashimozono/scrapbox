@@ -108,6 +108,172 @@ pub fn tpq_density(ed: &EdResult, beta: f64, n_samples: usize, seed: u64) -> Vec
     acc_density
 }
 
+/// Two-Hamiltonian canonical thermal work statistics for a sudden
+/// quench `H_init -> H_final` from the canonical state at inverse
+/// temperature `beta` of `H_init`.
+///
+/// `ed_init` and `ed_final` must share the same Hilbert dimension and
+/// joint basis (caller's responsibility -- this only checks
+/// dimension).
+///
+/// Per Sugiura-Shimizu the canonical thermal state of `H_init` is
+/// `|psi_beta> = exp(-beta H_init / 2) |psi_0>` for a random Gaussian
+/// `|psi_0>`. For a sudden quench the work operator is
+/// `W = H_final - H_init` and
+///
+/// ```text
+/// <W>      = <psi_beta| W      |psi_beta> / <psi_beta|psi_beta>,
+/// <W^2>    = <psi_beta| W^2    |psi_beta> / <psi_beta|psi_beta>,
+/// sigma_W^2 = <W^2> - <W>^2.
+/// ```
+///
+/// Numerator and denominator are pooled across samples (Sugiura-Shimizu
+/// unbiased estimator); `mean_w_stderr` is the sample-to-sample
+/// standard error of the per-sample ratio `(psi_beta . W psi_beta) /
+/// (psi_beta . psi_beta)`, suitable for FDR closure checks.
+#[derive(Debug, Clone, Copy)]
+pub struct TpqWorkStats {
+    /// Pooled estimate of `<W>`.
+    pub mean_w: f64,
+    /// `<W^2> - <W>^2` (the second cumulant; i.e. work variance).
+    pub work_variance: f64,
+    /// Sample-to-sample standard error of `mean_w`.
+    pub mean_w_stderr: f64,
+    /// Number of TPQ samples used.
+    pub n_samples: usize,
+}
+
+/// TPQ estimate of canonical thermal work statistics under a sudden
+/// quench `ed_init -> ed_final` at inverse temperature `beta`.
+#[must_use]
+pub fn tpq_work_statistics(
+    ed_init: &EdResult,
+    ed_final: &EdResult,
+    beta: f64,
+    n_samples: usize,
+    seed: u64,
+) -> TpqWorkStats {
+    assert!(n_samples > 0, "n_samples must be >= 1");
+    assert!(
+        !ed_init.eigenvalues.is_empty(),
+        "tpq_work_statistics: ed_init spectrum is empty"
+    );
+    assert_eq!(
+        ed_init.eigenvalues.len(),
+        ed_final.eigenvalues.len(),
+        "tpq_work_statistics: ed_init and ed_final must share Hilbert dimension          (got {} vs {})",
+        ed_init.eigenvalues.len(),
+        ed_final.eigenvalues.len()
+    );
+
+    let dim = ed_init.eigenvalues.len();
+    let shift = ed_init
+        .eigenvalues
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut acc_num_w = 0.0_f64;
+    let mut acc_num_w_sq = 0.0_f64;
+    let mut acc_denom = 0.0_f64;
+    let mut per_sample_mean_w: Vec<f64> = Vec::with_capacity(n_samples);
+
+    for _ in 0..n_samples {
+        let psi_0: Vec<f64> = (0..dim).map(|_| box_muller(&mut rng)).collect();
+
+        // c_k = U_init^T psi_0  (initial-eigenbasis amplitudes)
+        let mut c_k = vec![0.0_f64; dim];
+        for k in 0..dim {
+            let mut acc = 0.0_f64;
+            for (j, &a) in psi_0.iter().enumerate() {
+                acc += ed_init.eigenvectors[(j, k)] * a;
+            }
+            c_k[k] = acc;
+        }
+
+        // psi_beta[j] = sum_k U_init[j, k] * e^{-beta(E_init,k - shift)/2} * c_k
+        let mut psi_beta = vec![0.0_f64; dim];
+        for k in 0..dim {
+            let w = (-beta * (ed_init.eigenvalues[k] - shift) * 0.5).exp() * c_k[k];
+            for (j, p) in psi_beta.iter_mut().enumerate() {
+                *p += w * ed_init.eigenvectors[(j, k)];
+            }
+        }
+
+        // H_init psi_beta and H_final psi_beta via their eigen-decomps
+        let h_init_psi = apply_hamiltonian(&psi_beta, ed_init);
+        let h_final_psi = apply_hamiltonian(&psi_beta, ed_final);
+
+        // delta_psi = (H_final - H_init) psi_beta
+        let delta_psi: Vec<f64> = h_final_psi
+            .iter()
+            .zip(h_init_psi.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+
+        let num_w_i: f64 = psi_beta
+            .iter()
+            .zip(delta_psi.iter())
+            .map(|(p, d)| p * d)
+            .sum();
+        let num_w_sq_i: f64 = delta_psi.iter().map(|d| d * d).sum();
+        let denom_i: f64 = psi_beta.iter().map(|p| p * p).sum();
+
+        acc_num_w += num_w_i;
+        acc_num_w_sq += num_w_sq_i;
+        acc_denom += denom_i;
+        per_sample_mean_w.push(num_w_i / denom_i);
+    }
+
+    assert!(
+        acc_denom > 0.0,
+        "tpq_work_statistics: accumulated norm is zero -- all samples vanished after          e^(-beta H_init / 2)"
+    );
+    let mean_w = acc_num_w / acc_denom;
+    let mean_w_sq = acc_num_w_sq / acc_denom;
+    let work_variance = mean_w_sq - mean_w * mean_w;
+
+    let n_f = n_samples as f64;
+    let sample_mean: f64 = per_sample_mean_w.iter().sum::<f64>() / n_f;
+    let sample_var: f64 = per_sample_mean_w
+        .iter()
+        .map(|x| (x - sample_mean).powi(2))
+        .sum::<f64>()
+        / n_f;
+    let mean_w_stderr = (sample_var / n_f).sqrt();
+
+    TpqWorkStats {
+        mean_w,
+        work_variance,
+        mean_w_stderr,
+        n_samples,
+    }
+}
+
+/// Apply `H` (encoded by its eigen-decomposition in `ed`) to `psi`
+/// in the original basis: `H psi = U diag(E) U^T psi`.
+fn apply_hamiltonian(psi: &[f64], ed: &EdResult) -> Vec<f64> {
+    let dim = ed.eigenvalues.len();
+    debug_assert_eq!(psi.len(), dim);
+    let mut d = vec![0.0_f64; dim];
+    for alpha in 0..dim {
+        let mut acc = 0.0_f64;
+        for (j, &p) in psi.iter().enumerate() {
+            acc += ed.eigenvectors[(j, alpha)] * p;
+        }
+        d[alpha] = acc;
+    }
+    let mut out = vec![0.0_f64; dim];
+    for alpha in 0..dim {
+        let w = ed.eigenvalues[alpha] * d[alpha];
+        for (j, o) in out.iter_mut().enumerate() {
+            *o += w * ed.eigenvectors[(j, alpha)];
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::ed;
@@ -170,5 +336,87 @@ mod tests {
         let b = tpq_density(&result, 2.0, 20, 2);
         let diff: f64 = a.iter().zip(b.iter()).map(|(x, y)| (x - y).abs()).sum();
         assert!(diff > 1e-10, "different seeds should not collide");
+    }
+
+    #[test]
+    fn tpq_work_zero_quench_gives_zero_mean_and_variance() {
+        let v = [0.0_f64, 0.0, 0.0, 0.0];
+        let ed_init = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v);
+        let stats = tpq_work_statistics(&ed_init, &ed_init, 2.0, 30, 11);
+        assert!(stats.mean_w.abs() < 1e-10, "got mean_w = {}", stats.mean_w);
+        assert!(
+            stats.work_variance.abs() < 1e-10,
+            "got work_variance = {}",
+            stats.work_variance
+        );
+    }
+
+    #[test]
+    fn tpq_work_matches_ed_for_l4_sudden_quench() {
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let ed_init = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+
+        let dim = ed_init.eigenvalues.len();
+        let beta = 2.0;
+        let shift = ed_init
+            .eigenvalues
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let mut z = 0.0_f64;
+        let mut mean_w_ed = 0.0_f64;
+        let mut mean_w_sq_ed = 0.0_f64;
+        for n in 0..dim {
+            let weight = (-beta * (ed_init.eigenvalues[n] - shift)).exp();
+            z += weight;
+            let mut psi_n = vec![0.0_f64; dim];
+            for j in 0..dim {
+                psi_n[j] = ed_init.eigenvectors[(j, n)];
+            }
+            let h_init_psi = apply_hamiltonian(&psi_n, &ed_init);
+            let h_final_psi = apply_hamiltonian(&psi_n, &ed_final);
+            let delta_psi: Vec<f64> = h_final_psi
+                .iter()
+                .zip(h_init_psi.iter())
+                .map(|(a, b)| a - b)
+                .collect();
+            let w_n: f64 = psi_n.iter().zip(delta_psi.iter()).map(|(p, d)| p * d).sum();
+            let w_sq_n: f64 = delta_psi.iter().map(|d| d * d).sum();
+            mean_w_ed += weight * w_n;
+            mean_w_sq_ed += weight * w_sq_n;
+        }
+        mean_w_ed /= z;
+        mean_w_sq_ed /= z;
+        let sigma_w_sq_ed = mean_w_sq_ed - mean_w_ed * mean_w_ed;
+
+        let stats = tpq_work_statistics(&ed_init, &ed_final, beta, 600, 7);
+        assert!(
+            (stats.mean_w - mean_w_ed).abs() < 0.05,
+            "TPQ <W> = {} vs ED {} (stderr {})",
+            stats.mean_w,
+            mean_w_ed,
+            stats.mean_w_stderr
+        );
+        assert!(
+            (stats.work_variance - sigma_w_sq_ed).abs() < 0.1,
+            "TPQ sigma_W^2 = {} vs ED {}",
+            stats.work_variance,
+            sigma_w_sq_ed
+        );
+        assert!(stats.mean_w_stderr > 0.0);
+    }
+
+    #[test]
+    fn tpq_work_deterministic_with_same_seed() {
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.2_f64, -0.2, 0.2, -0.2];
+        let ed_init = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        let a = tpq_work_statistics(&ed_init, &ed_final, 2.0, 25, 42);
+        let b = tpq_work_statistics(&ed_init, &ed_final, 2.0, 25, 42);
+        assert!((a.mean_w - b.mean_w).abs() < 1e-14);
+        assert!((a.work_variance - b.work_variance).abs() < 1e-14);
     }
 }
