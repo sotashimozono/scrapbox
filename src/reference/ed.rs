@@ -268,6 +268,104 @@ pub fn free_energy(eigenvalues: &[f64], beta: f64) -> f64 {
     shift - z_shifted.ln() / beta
 }
 
+/// Exact Palamara 2024 III.3 quantum correction `Theta_2 = sigma_W^2 -
+/// sigma_W^2_diag` for a sudden quench `H_init -> H_final`. Off-diagonal
+/// contribution to the work variance in `H_init`'s eigenbasis:
+///
+/// ```text
+/// Theta_2_exact = (1/Z_init) Σ_n e^{-β E_init,n} ( <n_init|W^2|n_init> - W_nn^2 )
+/// W_nn          = <n_init| (H_final - H_init) |n_init>
+/// ```
+///
+/// Vanishes when `H_init` and `H_final` share an eigenbasis (trivial
+/// quench, or quench preserving symmetries that diagonalise both).
+/// Strictly positive otherwise.
+///
+/// `ed_init.eigenvalues.len()` and `ed_final.eigenvalues.len()` must be
+/// equal; both `EdResult`s must share the same joint occupation basis
+/// (caller's responsibility — only dimension is checked).
+#[must_use]
+pub fn exact_theta_2(ed_init: &EdResult, ed_final: &EdResult, beta: f64) -> f64 {
+    assert!(
+        !ed_init.eigenvalues.is_empty(),
+        "exact_theta_2: ed_init spectrum empty"
+    );
+    assert_eq!(
+        ed_init.eigenvalues.len(),
+        ed_final.eigenvalues.len(),
+        "exact_theta_2: ed_init and ed_final must share Hilbert dimension (got {} vs {})",
+        ed_init.eigenvalues.len(),
+        ed_final.eigenvalues.len()
+    );
+    let dim = ed_init.eigenvalues.len();
+    let shift = ed_init
+        .eigenvalues
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+
+    let mut z = 0.0_f64;
+    let mut sum_w_nn = 0.0_f64;
+    let mut sum_w_nn_sq = 0.0_f64;
+    let mut sum_full_w_sq_n = 0.0_f64;
+
+    for n in 0..dim {
+        let weight = (-beta * (ed_init.eigenvalues[n] - shift)).exp();
+        z += weight;
+
+        let mut psi_n = vec![0.0_f64; dim];
+        for j in 0..dim {
+            psi_n[j] = ed_init.eigenvectors[(j, n)];
+        }
+
+        let h_final_psi = apply_eigen_h(&psi_n, ed_final);
+        let h_init_psi: Vec<f64> = psi_n.iter().map(|p| ed_init.eigenvalues[n] * p).collect();
+        let delta_psi: Vec<f64> = h_final_psi
+            .iter()
+            .zip(h_init_psi.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+
+        let w_nn: f64 = psi_n.iter().zip(delta_psi.iter()).map(|(p, d)| p * d).sum();
+        let full_w_sq_n: f64 = delta_psi.iter().map(|d| d * d).sum();
+
+        sum_w_nn += weight * w_nn;
+        sum_w_nn_sq += weight * w_nn * w_nn;
+        sum_full_w_sq_n += weight * full_w_sq_n;
+    }
+
+    let mean_w = sum_w_nn / z;
+    let mean_w_sq = sum_full_w_sq_n / z;
+    let mean_w_nn_sq = sum_w_nn_sq / z;
+
+    let sigma_w_sq = mean_w_sq - mean_w * mean_w;
+    let sigma_w_sq_diag = mean_w_nn_sq - mean_w * mean_w;
+    sigma_w_sq - sigma_w_sq_diag
+}
+
+/// Apply a real-symmetric `H` (encoded by its eigen-decomposition in
+/// `ed`) to `psi` in the original basis: `H psi = U diag(E) U^T psi`.
+fn apply_eigen_h(psi: &[f64], ed: &EdResult) -> Vec<f64> {
+    let dim = ed.eigenvalues.len();
+    debug_assert_eq!(psi.len(), dim);
+    let mut d = vec![0.0_f64; dim];
+    for alpha in 0..dim {
+        let mut acc = 0.0_f64;
+        for (j, &p) in psi.iter().enumerate() {
+            acc += ed.eigenvectors[(j, alpha)] * p;
+        }
+        d[alpha] = acc;
+    }
+    let mut out = vec![0.0_f64; dim];
+    for alpha in 0..dim {
+        let w = ed.eigenvalues[alpha] * d[alpha];
+        for (j, o) in out.iter_mut().enumerate() {
+            *o += w * ed.eigenvectors[(j, alpha)];
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +478,101 @@ mod tests {
         assert!(
             (f_ed - f_pratt).abs() < 1e-9,
             "ED F = {f_ed}, Pratt F = {f_pratt}"
+        );
+    }
+
+    #[test]
+    fn exact_theta_2_trivial_quench_is_zero() {
+        let v = [0.1_f64, -0.2, 0.3, -0.1];
+        let ed_init = canonical_thermal(4, 2, 2, 1.0, 4.0, &v);
+        let theta = exact_theta_2(&ed_init, &ed_init, 2.0);
+        assert!(
+            theta.abs() < 1e-10,
+            "trivial quench should give 0, got {theta}"
+        );
+    }
+
+    #[test]
+    fn exact_theta_2_small_quench_is_positive_at_l4() {
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let ed_init = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        let theta = exact_theta_2(&ed_init, &ed_final, 2.0);
+        assert!(
+            theta > 0.0,
+            "non-commuting quench should give theta > 0, got {theta}"
+        );
+        assert!(
+            theta < 1.0,
+            "theta should be modest for delta_v = 0.3 quench, got {theta}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::suspicious_operation_groupings)]
+    fn exact_theta_2_differs_from_diagonal_part_at_l4() {
+        // sanity: full sigma_W^2 = exact_theta_2 + sigma_W^2_diag, where
+        // sigma_W^2_diag is the variance of W_nn (diagonal-only). Here we
+        // just check theta_2 < full variance and > 0.
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let ed_init = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        let theta = exact_theta_2(&ed_init, &ed_final, 2.0);
+        // Recompute sigma_W^2 directly for cross-check.
+        let dim = ed_init.eigenvalues.len();
+        let shift = ed_init
+            .eigenvalues
+            .iter()
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let beta = 2.0;
+        let mut z = 0.0_f64;
+        let mut sum_w_nn = 0.0_f64;
+        let mut sum_full = 0.0_f64;
+        for n in 0..dim {
+            let weight = (-beta * (ed_init.eigenvalues[n] - shift)).exp();
+            z += weight;
+            let mut psi_n = vec![0.0_f64; dim];
+            for j in 0..dim {
+                psi_n[j] = ed_init.eigenvectors[(j, n)];
+            }
+            let h_final_psi = apply_eigen_h(&psi_n, &ed_final);
+            let h_init_psi: Vec<f64> = psi_n.iter().map(|p| ed_init.eigenvalues[n] * p).collect();
+            let delta: Vec<f64> = h_final_psi
+                .iter()
+                .zip(h_init_psi.iter())
+                .map(|(a, b)| a - b)
+                .collect();
+            sum_w_nn += weight
+                * psi_n
+                    .iter()
+                    .zip(delta.iter())
+                    .map(|(p, d)| p * d)
+                    .sum::<f64>();
+            sum_full += weight * delta.iter().map(|d| d * d).sum::<f64>();
+        }
+        let mean_w = sum_w_nn / z;
+        let sigma_w_sq = sum_full / z - mean_w * mean_w;
+        assert!(
+            theta > 0.0 && sigma_w_sq - theta >= -1e-12,
+            "Theta_2 should be in (0, sigma_W^2]: theta = {theta}, sigma_W^2 = {sigma_w_sq}"
+        );
+    }
+
+    #[test]
+    fn exact_theta_2_zero_u_zero_quench_is_zero() {
+        // At U=0 only kinetic + 1-body potential; W = delta_V is the
+        // single-particle density operator. It still has off-diagonal
+        // matrix elements in H_init's eigenbasis, so Theta_2 != 0 even
+        // at U=0. But for the strict NO-quench case it must be 0.
+        let v = [0.1_f64, 0.2, -0.1, 0.0];
+        let ed_init = canonical_thermal(4, 2, 2, 1.0, 0.0, &v);
+        let theta = exact_theta_2(&ed_init, &ed_init, 2.0);
+        assert!(
+            theta.abs() < 1e-10,
+            "U=0 trivial quench should give 0, got {theta}"
         );
     }
 }
