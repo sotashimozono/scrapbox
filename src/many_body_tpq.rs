@@ -16,6 +16,7 @@ use crate::config::{Config, Quench, TpqKind, TpqSource, TpqSpec};
 use crate::error::{Result, ScrapboxError};
 use crate::reference::{ed, tpq};
 use crate::spectrum::hubbard_jw::JwHubbard;
+use crate::spectrum::krylov::KrylovSpec;
 use crate::spectrum::linear_operator::LinearOperator;
 use serde::Serialize;
 use std::path::Path;
@@ -126,6 +127,18 @@ fn run_density_ed(
     }
 }
 
+fn krylov_spec_from(tpq_cfg: &TpqSpec) -> KrylovSpec {
+    tpq_cfg.krylov_tol.map_or_else(
+        || KrylovSpec::Fixed {
+            m: tpq_cfg.krylov_m.unwrap_or(30),
+        },
+        |tol| KrylovSpec::Adaptive {
+            tol,
+            max_m: tpq_cfg.krylov_m.unwrap_or(60),
+        },
+    )
+}
+
 fn run_density_mf(
     cfg: &Config,
     v_ext: &[f64],
@@ -143,9 +156,9 @@ fn run_density_mf(
         v_ext,
     );
     let dim = jw.dim();
-    let m = tpq_cfg.krylov_m.unwrap_or(30);
+    let spec = krylov_spec_from(tpq_cfg);
     let start = Instant::now();
-    let density = tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, tpq_cfg.seed, m);
+    let density = tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, tpq_cfg.seed, spec);
     let elapsed = start.elapsed().as_millis();
     TpqRunOutput::Density {
         source: "matrix_free",
@@ -237,7 +250,7 @@ fn run_work_mf(
         &v_final,
     );
     let dim = jw_init.dim();
-    let m = tpq_cfg.krylov_m.unwrap_or(30);
+    let spec = krylov_spec_from(tpq_cfg);
     let start = Instant::now();
     let stats = tpq::tpq_work_statistics_matrix_free(
         &jw_init,
@@ -245,7 +258,7 @@ fn run_work_mf(
         beta,
         tpq_cfg.n_samples,
         tpq_cfg.seed,
-        m,
+        spec,
     );
     let elapsed = start.elapsed().as_millis();
     Ok(TpqRunOutput::WorkStatistics {

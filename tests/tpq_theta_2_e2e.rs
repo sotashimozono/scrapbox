@@ -276,3 +276,133 @@ fn tpq_theta_2_matrix_free_k_dim_matches_ed_at_l4() {
     std::fs::remove_file(&cfg_mf).ok();
     std::fs::remove_file(&cfg_ed).ok();
 }
+
+fn write_tpq_density_mf_config(
+    path: &std::path::Path,
+    tag: &str,
+    krylov_m: Option<usize>,
+    krylov_tol: Option<f64>,
+) {
+    let krylov_m_line = krylov_m
+        .map(|m| {
+            format!(
+                "krylov_m = {m}
+"
+            )
+        })
+        .unwrap_or_default();
+    let krylov_tol_line = krylov_tol
+        .map(|t| {
+            format!(
+                "krylov_tol = {t}
+"
+            )
+        })
+        .unwrap_or_default();
+    let body = format!(
+        r#"
+schema_version = "0.2"
+
+[meta]
+name = "tpq_krylov_tol_e2e_{tag}"
+description = "v0.10 gamma adaptive krylov dispatch e2e"
+created = "2026-05-24"
+tags = ["v0.10", "tpq", "krylov_tol"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 4
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 2
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.1, -0.1, 0.1, -0.1]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[observables]
+
+[tpq]
+kind = "density"
+source = "matrix_free"
+n_samples = 200
+seed = 42
+{krylov_m_line}{krylov_tol_line}
+[output]
+directory = "runs/tpq_krylov_tol_e2e_{tag}"
+format = "json"
+overwrite = true
+"#
+    );
+    std::fs::write(path, body).expect("write config");
+}
+
+#[test]
+fn tpq_adaptive_krylov_density_matches_fixed_at_l4() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+
+    let cfg_fixed = std::path::Path::new(manifest).join("configs/_test_tpq_krylov_fixed.toml");
+    write_tpq_density_mf_config(&cfg_fixed, "fixed", Some(30), None);
+    assert!(invoke("tpq", &cfg_fixed).success());
+    let d_fixed = {
+        let path =
+            std::path::Path::new(manifest).join("runs/tpq_krylov_tol_e2e_fixed/tpq_report.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["density"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect::<Vec<f64>>()
+    };
+
+    let cfg_adaptive =
+        std::path::Path::new(manifest).join("configs/_test_tpq_krylov_adaptive.toml");
+    write_tpq_density_mf_config(&cfg_adaptive, "adaptive", Some(60), Some(1e-10));
+    assert!(invoke("tpq", &cfg_adaptive).success());
+    let d_adaptive = {
+        let path =
+            std::path::Path::new(manifest).join("runs/tpq_krylov_tol_e2e_adaptive/tpq_report.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["density"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_f64().unwrap())
+            .collect::<Vec<f64>>()
+    };
+
+    assert_eq!(d_fixed.len(), 4);
+    assert_eq!(d_adaptive.len(), 4);
+    // Same seed, same n_samples; adaptive at tol=1e-10 should hit the
+    // same Krylov accuracy as fixed m=30. Allow loose 1e-6 since the
+    // Krylov stopping condition reorders floating-point ops slightly.
+    for i in 0..4 {
+        assert!(
+            (d_fixed[i] - d_adaptive[i]).abs() < 1e-6,
+            "site {i}: fixed = {}, adaptive = {}",
+            d_fixed[i],
+            d_adaptive[i]
+        );
+    }
+    std::fs::remove_file(&cfg_fixed).ok();
+    std::fs::remove_file(&cfg_adaptive).ok();
+}

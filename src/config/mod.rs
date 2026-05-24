@@ -755,8 +755,17 @@ pub struct TpqSpec {
     #[serde(default)]
     pub beta: Option<f64>,
     /// Krylov subspace dim per sample (`matrix_free` only); default 30.
+    /// When `krylov_tol` is set this becomes the upper bound (`max_m`)
+    /// for adaptive Krylov; otherwise it is the fixed `m`.
     #[serde(default)]
     pub krylov_m: Option<usize>,
+    /// Adaptive Krylov residual tolerance (`matrix_free` only). When
+    /// set, every per-sample `exp(-beta H / 2)` application uses Saad
+    /// posteriori bound to stop at the first subspace size that
+    /// satisfies `|residual| < krylov_tol`, capped at `krylov_m` (or
+    /// 60 if unset). When `None`, a fixed `m = krylov_m ?? 30` is used.
+    #[serde(default)]
+    pub krylov_tol: Option<f64>,
     /// Number of low-energy Lanczos eigenstates to keep for matrix-free
     /// exact `Theta_2` (`kind = "theta_2"`, `source = "matrix_free"`);
     /// default 16. Has no effect for other `kind` / `source` combinations.
