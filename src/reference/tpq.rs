@@ -15,8 +15,11 @@
 //! ```
 //!
 //! TPQ replaces the trace by an average over random pure states. Given
-//! a random vector `|psi_0> = sum_k c_k |k>` with `c_k ~ N(0, 1) +
-//! i N(0, 1)`, the canonical TPQ state is
+//! a random vector `|psi_0> = sum_k c_k |k>` with real Gaussian
+//! `c_k ~ N(0, 1)` (real amplitudes are sufficient because the lattice
+//! Hubbard Hamiltonian is real-symmetric; complex Gaussian halves the
+//! statistical variance but is not required for correctness), the
+//! canonical TPQ state is
 //!
 //! ```text
 //! |psi_beta> = e^{-beta H / 2} |psi_0> = sum_k e^{-beta E_k / 2} c_k |k>.
@@ -95,6 +98,10 @@ pub fn tpq_density(ed: &EdResult, beta: f64, n_samples: usize, seed: u64) -> Vec
         acc_norm_sq += sample_norm_sq;
     }
 
+    assert!(
+        acc_norm_sq > 0.0,
+        "tpq_density: accumulated norm is zero -- all samples vanished after          e^(-beta H / 2) projection; check that beta is finite and the          spectrum is non-degenerate"
+    );
     for x in &mut acc_density {
         *x /= acc_norm_sq;
     }

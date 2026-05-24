@@ -171,7 +171,7 @@ pub fn compute_observables(
                 return Err(ScrapboxError::ConfigValidation {
                     message: format!(
                         "[observables].theta_2.method = {other:?} is not a recognized value \
-                         (supported: \"zero\")"
+                         (supported: \"zero\", \"lda\")"
                     ),
                 });
             }

@@ -168,6 +168,7 @@ fn axpy(y: &mut [f64], a: f64, x: &[f64]) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::linear_operator::SparseMatrix;
     use super::*;
 
     fn default_params(n: usize) -> LanczosParams {
@@ -263,5 +264,48 @@ mod tests {
             tol: 1e-12,
         };
         assert!(diagonalize(&h, &bad).is_err());
+    }
+
+    #[test]
+    fn lanczos_agrees_between_dense_and_sparse_5x5_spd() {
+        // Build a 5x5 symmetric tridiagonal-ish matrix in both dense
+        // and CSR form. Lanczos diagonalisation must agree to 1e-9 on
+        // the full spectrum.
+        let triples = [
+            (0, 0, 2.0),
+            (1, 1, 3.0),
+            (2, 2, 4.0),
+            (3, 3, 5.0),
+            (4, 4, 6.0),
+            (0, 1, -1.0),
+            (1, 0, -1.0),
+            (1, 2, -1.0),
+            (2, 1, -1.0),
+            (2, 3, -1.0),
+            (3, 2, -1.0),
+            (3, 4, -1.0),
+            (4, 3, -1.0),
+        ];
+        let mut h_dense = Mat::<f64>::zeros(5, 5);
+        for &(i, j, v) in &triples {
+            h_dense[(i, j)] = v;
+        }
+        let h_sparse = SparseMatrix::from_triples(5, &triples);
+
+        let params = LanczosParams {
+            krylov_dim: None,
+            max_iter: 50,
+            tol: 1e-14,
+        };
+        let eig_d = diagonalize(&h_dense, &params).unwrap();
+        let eig_s = diagonalize(&h_sparse, &params).unwrap();
+        assert_eq!(eig_d.eigenvalues.len(), eig_s.eigenvalues.len());
+        let mut d_vals = eig_d.eigenvalues;
+        let mut s_vals = eig_s.eigenvalues;
+        d_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        s_vals.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        for (a, b) in d_vals.iter().zip(s_vals.iter()) {
+            assert!((a - b).abs() < 1e-9, "dense = {a}, sparse = {b}");
+        }
     }
 }

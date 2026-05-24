@@ -17,12 +17,21 @@
 use faer::Mat;
 
 /// Anything that can apply `y = H x` for real-symmetric `H`.
+///
+/// Implementations are consumed by Lanczos and must behave as a real
+/// symmetric linear operator: `apply` is treated as left-multiplication
+/// `y <- H x`, and the iterative kernel assumes `H = H^T`.
 pub trait LinearOperator {
     /// Square matrix dimension.
     fn dim(&self) -> usize;
 
     /// Compute `y = self * x`. `x.len()` and `y.len()` must equal
     /// `self.dim()`.
+    ///
+    /// `y` is **fully overwritten**; prior contents are ignored, not
+    /// accumulated into. Implementors must not assume `y` starts at
+    /// zero, and callers must not rely on the operator adding into
+    /// `y` (i.e. there is no `+=` semantics).
     fn apply(&self, x: &[f64], y: &mut [f64]);
 }
 
@@ -56,8 +65,17 @@ pub struct SparseMatrix {
 }
 
 impl SparseMatrix {
-    /// Build from `(row, col, value)` triples. Duplicates are summed;
-    /// zero values dropped.
+    /// Build a CSR matrix from `(row, col, value)` triples.
+    ///
+    /// Duplicate `(row, col)` entries are **summed**, not overwritten
+    /// (so pass each coefficient only once if you want assignment
+    /// semantics). Entries with `value == 0.0` are dropped to keep the
+    /// CSR sparse.
+    ///
+    /// Symmetry is **not** checked. Callers consuming this through
+    /// [`LinearOperator`] (notably Lanczos) must ensure the triples
+    /// describe a symmetric matrix `A == A.T`; otherwise the resulting
+    /// eigenpairs are wrong with no warning.
     #[must_use]
     pub fn from_triples(dim: usize, triples: &[(usize, usize, f64)]) -> Self {
         let mut row_buckets: Vec<Vec<(usize, f64)>> = vec![Vec::new(); dim];
