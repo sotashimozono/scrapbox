@@ -5,6 +5,7 @@
 # Identifiers we use in src/ and notes/ that look like typos but are not.
 mul = 'mul'   # used in mul_add / linear-algebra identifiers
 nd   = 'nd'   # ndarray / nd-matrix prefixes
+BA   = 'BA'   # Bethe-ansatz prefix in e_BA, V_HXC^BALDA
 
 [default.extend-identifiers]
 # Author / scientist surnames that appear throughout the corpus.

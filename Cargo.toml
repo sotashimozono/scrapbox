@@ -37,7 +37,7 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
-# Bessel functions for reference::bethe::lieb_wu integral.
+# Bessel functions for reference::bethe::lieb_wu integral (also used by BALDA xc, Lima 2003).
 libm = "0.2"
 
 [dev-dependencies]
