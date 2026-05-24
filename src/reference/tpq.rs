@@ -643,6 +643,171 @@ where
     }
 }
 
+/// Matrix-free + complex-Gaussian variant of [`tpq_density_matrix_free`].
+/// Same Krylov-driven thermal-state machinery; doubles the workspace
+/// to carry real and imaginary amplitudes, which halves the per-sample
+/// variance of `|psi_beta|^2`-weighted diagonal observables.
+#[must_use]
+pub fn tpq_density_matrix_free_complex(
+    jw: &crate::spectrum::hubbard_jw::JwHubbard,
+    beta: f64,
+    n_samples: usize,
+    seed: u64,
+    krylov_m: usize,
+) -> Vec<f64> {
+    use crate::spectrum::linear_operator::LinearOperator;
+    assert!(n_samples > 0, "n_samples must be >= 1");
+    let dim = jw.dim();
+    assert!(dim > 0, "JwHubbard dim must be > 0");
+    let num_sites = jw.num_sites();
+    let joint = jw.joint_masks();
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut acc_density = vec![0.0_f64; num_sites];
+    let mut acc_norm_sq = 0.0_f64;
+    let scale = 1.0 / std::f64::consts::SQRT_2;
+
+    for _ in 0..n_samples {
+        let mut psi_re_0 = vec![0.0_f64; dim];
+        let mut psi_im_0 = vec![0.0_f64; dim];
+        for j in 0..dim {
+            let (a, b) = box_muller_pair(&mut rng);
+            psi_re_0[j] = scale * a;
+            psi_im_0[j] = scale * b;
+        }
+        let psi_re = crate::spectrum::krylov::expm_apply(jw, -beta * 0.5, &psi_re_0, krylov_m);
+        let psi_im = crate::spectrum::krylov::expm_apply(jw, -beta * 0.5, &psi_im_0, krylov_m);
+
+        let mut sample_norm_sq = 0.0_f64;
+        for j in 0..dim {
+            sample_norm_sq += psi_re[j] * psi_re[j] + psi_im[j] * psi_im[j];
+        }
+        for site in 0..num_sites {
+            let mut occ_acc = 0.0_f64;
+            for (j, &(up_mask, dn_mask)) in joint.iter().enumerate() {
+                let occ = f64::from(((up_mask >> site) & 1) + ((dn_mask >> site) & 1));
+                occ_acc += (psi_re[j] * psi_re[j] + psi_im[j] * psi_im[j]) * occ;
+            }
+            acc_density[site] += occ_acc;
+        }
+        acc_norm_sq += sample_norm_sq;
+    }
+
+    assert!(
+        acc_norm_sq > 0.0,
+        "tpq_density_matrix_free_complex: accumulated norm is zero"
+    );
+    for x in &mut acc_density {
+        *x /= acc_norm_sq;
+    }
+    acc_density
+}
+
+/// Matrix-free + complex-Gaussian variant of
+/// [`tpq_work_statistics_matrix_free`]. Same generic LinearOperator
+/// contract but with complex amplitudes for variance reduction.
+#[must_use]
+pub fn tpq_work_statistics_matrix_free_complex<O1, O2>(
+    h_init: &O1,
+    h_final: &O2,
+    beta: f64,
+    n_samples: usize,
+    seed: u64,
+    krylov_m: usize,
+) -> TpqWorkStats
+where
+    O1: crate::spectrum::linear_operator::LinearOperator,
+    O2: crate::spectrum::linear_operator::LinearOperator,
+{
+    assert!(n_samples > 0, "n_samples must be >= 1");
+    let dim = h_init.dim();
+    assert_eq!(
+        dim,
+        h_final.dim(),
+        "tpq_work_statistics_matrix_free_complex: h_init and h_final must share dim \
+         (got {} vs {})",
+        dim,
+        h_final.dim()
+    );
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut acc_num_w = 0.0_f64;
+    let mut acc_num_w_sq = 0.0_f64;
+    let mut acc_denom = 0.0_f64;
+    let mut per_sample_mean_w: Vec<f64> = Vec::with_capacity(n_samples);
+    let scale = 1.0 / std::f64::consts::SQRT_2;
+
+    for _ in 0..n_samples {
+        let mut psi_re_0 = vec![0.0_f64; dim];
+        let mut psi_im_0 = vec![0.0_f64; dim];
+        for j in 0..dim {
+            let (a, b) = box_muller_pair(&mut rng);
+            psi_re_0[j] = scale * a;
+            psi_im_0[j] = scale * b;
+        }
+        let psi_re = crate::spectrum::krylov::expm_apply(h_init, -beta * 0.5, &psi_re_0, krylov_m);
+        let psi_im = crate::spectrum::krylov::expm_apply(h_init, -beta * 0.5, &psi_im_0, krylov_m);
+
+        let mut h_init_psi_re = vec![0.0_f64; dim];
+        h_init.apply(&psi_re, &mut h_init_psi_re);
+        let mut h_init_psi_im = vec![0.0_f64; dim];
+        h_init.apply(&psi_im, &mut h_init_psi_im);
+        let mut h_final_psi_re = vec![0.0_f64; dim];
+        h_final.apply(&psi_re, &mut h_final_psi_re);
+        let mut h_final_psi_im = vec![0.0_f64; dim];
+        h_final.apply(&psi_im, &mut h_final_psi_im);
+
+        let delta_re: Vec<f64> = h_final_psi_re
+            .iter()
+            .zip(h_init_psi_re.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+        let delta_im: Vec<f64> = h_final_psi_im
+            .iter()
+            .zip(h_init_psi_im.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+
+        let mut num_w_i = 0.0_f64;
+        let mut num_w_sq_i = 0.0_f64;
+        let mut denom_i = 0.0_f64;
+        for j in 0..dim {
+            num_w_i += psi_re[j] * delta_re[j] + psi_im[j] * delta_im[j];
+            num_w_sq_i += delta_re[j] * delta_re[j] + delta_im[j] * delta_im[j];
+            denom_i += psi_re[j] * psi_re[j] + psi_im[j] * psi_im[j];
+        }
+
+        acc_num_w += num_w_i;
+        acc_num_w_sq += num_w_sq_i;
+        acc_denom += denom_i;
+        per_sample_mean_w.push(num_w_i / denom_i);
+    }
+
+    assert!(
+        acc_denom > 0.0,
+        "tpq_work_statistics_matrix_free_complex: accumulated norm is zero"
+    );
+    let mean_w = acc_num_w / acc_denom;
+    let mean_w_sq = acc_num_w_sq / acc_denom;
+    let work_variance = mean_w_sq - mean_w * mean_w;
+
+    let n_f = n_samples as f64;
+    let sample_mean: f64 = per_sample_mean_w.iter().sum::<f64>() / n_f;
+    let sample_var: f64 = per_sample_mean_w
+        .iter()
+        .map(|x| (x - sample_mean).powi(2))
+        .sum::<f64>()
+        / n_f;
+    let mean_w_stderr = (sample_var / n_f).sqrt();
+
+    TpqWorkStats {
+        mean_w,
+        work_variance,
+        mean_w_stderr,
+        n_samples,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::ed;
@@ -995,5 +1160,82 @@ mod tests {
         let b = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, 25, 42, 20);
         assert!((a.mean_w - b.mean_w).abs() < 1e-14);
         assert!((a.work_variance - b.work_variance).abs() < 1e-14);
+    }
+
+    #[test]
+    fn tpq_density_mf_complex_matches_ed_path_at_l4() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v = [0.1_f64, -0.1, 0.1, -0.1];
+        let ed_result = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v);
+        let n_ed = ed::thermal_density(&ed_result, 2.0);
+        let jw = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v);
+        let n_mf = tpq_density_matrix_free_complex(&jw, 2.0, 500, 7, 30);
+        for i in 0..4 {
+            assert!(
+                (n_mf[i] - n_ed[i]).abs() < 0.05,
+                "site {i}: matrix-free complex TPQ = {}, ED = {}",
+                n_mf[i],
+                n_ed[i]
+            );
+        }
+    }
+
+    #[test]
+    fn tpq_work_mf_complex_matches_ed_path_at_l4_sudden_quench() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let ed_init = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_init);
+        let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
+
+        let ed_stats = tpq_work_statistics(&ed_init, &ed_final, 2.0, 600, 7);
+        let mf_stats =
+            tpq_work_statistics_matrix_free_complex(&jw_init, &jw_final, 2.0, 600, 7, 30);
+
+        assert!(
+            (mf_stats.mean_w - ed_stats.mean_w).abs() < 0.05,
+            "<W>: matrix-free complex = {}, ED = {}",
+            mf_stats.mean_w,
+            ed_stats.mean_w
+        );
+        assert!(
+            (mf_stats.work_variance - ed_stats.work_variance).abs() < 0.15,
+            "sigma_W^2: matrix-free complex = {}, ED = {}",
+            mf_stats.work_variance,
+            ed_stats.work_variance
+        );
+    }
+
+    #[test]
+    fn tpq_work_mf_complex_reduces_variance_versus_mf_real() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_init);
+        let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
+        let n = 800;
+        let mf_real = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, n, 13, 30);
+        let mf_cplx = tpq_work_statistics_matrix_free_complex(&jw_init, &jw_final, 2.0, n, 13, 30);
+        let ratio = mf_cplx.mean_w_stderr / mf_real.mean_w_stderr;
+        assert!(
+            ratio < 0.9,
+            "complex stderr {} not noticeably below real stderr {} (ratio {})",
+            mf_cplx.mean_w_stderr,
+            mf_real.mean_w_stderr,
+            ratio
+        );
+    }
+
+    #[test]
+    fn tpq_density_mf_complex_deterministic_with_same_seed() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let jw = JwHubbard::new(2, 1, 1, 1.0, 4.0, &[0.0, 0.0]);
+        let a = tpq_density_matrix_free_complex(&jw, 2.0, 20, 99, 8);
+        let b = tpq_density_matrix_free_complex(&jw, 2.0, 20, 99, 8);
+        for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
+            assert!((x - y).abs() < 1e-12, "site {i}: not reproducible");
+        }
     }
 }
