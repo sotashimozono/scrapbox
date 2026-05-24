@@ -53,6 +53,9 @@ pub struct Config {
     /// Many-body ED solver spec — optional, drives `scrapbox ed`.
     #[serde(default)]
     pub ed: Option<EdSpec>,
+    /// TPQ analysis spec — optional, drives `scrapbox tpq`.
+    #[serde(default)]
+    pub tpq: Option<TpqSpec>,
 }
 
 impl Config {
@@ -708,6 +711,48 @@ pub struct EdSpec {
     /// full spectrum; iterative backends default to 8.
     #[serde(default)]
     pub num_eigenvalues: Option<usize>,
+}
+
+// --- TpqSpec (v0.8 beta) ---------------------------------------------------
+
+/// Which TPQ analysis to dispatch.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TpqKind {
+    /// Per-site spin-summed canonical thermal density.
+    Density,
+    /// Sudden-quench canonical work statistics.
+    WorkStatistics,
+}
+
+/// Which backend to drive the TPQ sampler.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TpqSource {
+    /// Build `EdResult`(s) then call the ED-path TPQ functions.
+    Ed,
+    /// Drive the `LinearOperator` paths (Krylov for exp(-beta H/2)).
+    MatrixFree,
+}
+
+/// `[tpq]` section: TPQ analysis spec.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TpqSpec {
+    /// Which TPQ analysis to dispatch.
+    pub kind: TpqKind,
+    /// Which backend drives the sampler.
+    pub source: TpqSource,
+    /// Number of TPQ samples to draw.
+    pub n_samples: usize,
+    /// RNG seed for reproducible Gaussian draws.
+    pub seed: u64,
+    /// Optional override; defaults to hamiltonian.beta.
+    #[serde(default)]
+    pub beta: Option<f64>,
+    /// Krylov subspace dim per sample (`matrix_free` only); default 30.
+    #[serde(default)]
+    pub krylov_m: Option<usize>,
 }
 
 #[cfg(test)]
