@@ -6,6 +6,9 @@
 
 use std::process::Command;
 
+// beta = 2.0 from configs/dimer_balda_quench.toml; beta^2/2 = 2.0.
+const BETA: f64 = 2.0;
+
 #[test]
 fn balda_dimer_lda_theta_improves_fdr_closure() {
     let manifest = env!("CARGO_MANIFEST_DIR");
@@ -39,7 +42,7 @@ fn balda_dimer_lda_theta_improves_fdr_closure() {
 
     assert!(theta_2 > 0.0, "Theta_2 = {theta_2}, expected > 0");
 
-    let beta_squared_over_two = 2.0_f64;
+    let beta_squared_over_two = 0.5 * BETA * BETA;
     let expected_residual = s_irr - beta_squared_over_two * (sigma_w_sq - theta_2);
     assert!(
         (fdr_residual - expected_residual).abs() < 1e-10,
