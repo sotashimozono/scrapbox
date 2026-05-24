@@ -1,0 +1,68 @@
+schema_version = "0.2"
+
+[meta]
+name = "quench_w_squared_l4"
+description = "L=4 half-filling sudden quench from V=0 to comb V, observing W^2 and the generalized FDR (Palamara 2024 Sec III.3)."
+created = "2026-05-24"
+tags = ["v0.4", "demo", "quench", "fdr"]
+
+# Physics:
+# Sudden quench from uniform V=0 to staggered V'=(+v0, -v0, +v0, -v0).
+# Because [H_0, H_f] != 0 (V breaks translation), the quench is
+# non-commuting. We measure:
+#   <W>        = mean work
+#   <S_irr>    = irreversible entropy production
+#   <W^2>_c    = work variance (cumulant) from finite-difference susceptibility
+#   sigma_w^2  = <W^2> - <W>^2
+#   Theta_2    = quantum correction (0 in the classical / commuting limit)
+#   FDR residual = <S_irr> - (beta^2/2)(sigma_w^2 - Theta_2)
+# With method="zero" the FDR residual measures the non-commuting
+# quantum correction the LDA route would compute.
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 4
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 2
+beta = 2.0
+external_potential.kind = "uniform"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "hubbard_lda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 2000
+tolerance = 1e-10
+mixing.kind = "linear"
+mixing.alpha = 0.05
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "explicit"
+final_external_potential.values = [0.05, -0.05, 0.05, -0.05]
+
+[observables]
+mean_work = true
+irreversible_entropy = true
+work_variance = true
+theta_2.method = "zero"
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/quench_w_squared_l4"
+format = "json"
+dump_density = true
+dump_spectrum = false
+dump_partition_function = true
+overwrite = true

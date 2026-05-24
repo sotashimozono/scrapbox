@@ -1,0 +1,63 @@
+schema_version = "0.2"
+
+[meta]
+name = "cdw_response_l6"
+description = "L=6 Hubbard with staggered V; sweep comb amplitude to show CDW order parameter growth."
+created = "2026-05-24"
+tags = ["v0.4", "demo", "cdw"]
+
+# Physics:
+# A staggered external potential V = (+v, -v, +v, -v, +v, -v) induces a
+# charge-density wave. The CDW order parameter
+#     m_CDW = (1/L) Sum_i (-1)^i n_i
+# grows with v from 0 in the small-v limit. At U > 0 the LDA functional
+# softens the response (correlation hole). Comparing m_CDW(v, U=0) vs
+# m_CDW(v, U=4) shows the interaction-induced suppression.
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 6
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 3
+beta = 2.0
+external_potential.kind = "comb"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "hubbard_lda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 2000
+tolerance = 1e-10
+mixing.kind = "linear"
+mixing.alpha = 0.05
+initial_density.kind = "uniform"
+
+[observables]
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/cdw_response_l6_PLACEHOLDER"
+format = "json"
+dump_density = true
+dump_spectrum = false
+dump_partition_function = true
+overwrite = true
+
+[sweep]
+subdir_template = "runs/cdw_response_l6/v_{v}"
+parallelism = 4
+
+[[sweep.axes]]
+key = "hamiltonian.external_potential.amplitude"
+label = "v"
+values = [0.0, 0.05, 0.1, 0.2, 0.4]

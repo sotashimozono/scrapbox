@@ -1,0 +1,62 @@
+schema_version = "0.2"
+
+[meta]
+name = "mott_crossover_l4"
+description = "L=4 half-filled Hubbard with small comb V; sweep U from 0 to 16 to show Mott-localization weakening the density response."
+created = "2026-05-24"
+tags = ["v0.4", "demo", "mott"]
+
+# Physics:
+# At U=0 the LDA-DFT density faithfully mirrors the comb perturbation
+# (free chain susceptibility). As U grows past the bandwidth ~4t, the
+# Mott gap suppresses charge response: density modulation |n_i - 1|
+# shrinks. The expected scaling (perturbative): |dn| ~ |V|/U for U >> t.
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 4
+hopping_j = 1.0
+on_site_interaction = 0.0
+spinful = true
+num_electrons_per_spin = 2
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.05, -0.05, 0.05, -0.05]
+
+[xc_functional]
+kind = "hubbard_lda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 2000
+tolerance = 1e-10
+mixing.kind = "pulay"
+mixing.alpha = 0.1
+mixing.history_depth = 8
+initial_density.kind = "uniform"
+
+[observables]
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/mott_crossover_l4_PLACEHOLDER"
+format = "json"
+dump_density = true
+dump_spectrum = false
+dump_partition_function = true
+overwrite = true
+
+[sweep]
+subdir_template = "runs/mott_crossover_l4/U_{U}"
+parallelism = 4
+
+[[sweep.axes]]
+key = "hamiltonian.on_site_interaction"
+label = "U"
+values = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0]
