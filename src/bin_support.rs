@@ -161,19 +161,17 @@ pub fn compute_observables(
 
         let theta_2 = match cfg.observables.theta_2.method.as_str() {
             "zero" => 0.0,
-            "lda" => {
-                return Err(ScrapboxError::ConfigValidation {
-                    message: "[observables].theta_2.method = \"lda\" requires a Bethe-ansatz \
-                              homogeneous reference and is gated to v0.3+ (see PHASES.md). \
-                              Use \"zero\" until BALDA lands."
-                        .into(),
-                });
-            }
+            "lda" => crate::observables::theta_2_lda::lda_theta_2(
+                cfg.hamiltonian.on_site_interaction / cfg.hamiltonian.hopping_j,
+                &delta,
+                &ks_state.densities,
+                &cfg.xc_functional,
+            )?,
             other => {
                 return Err(ScrapboxError::ConfigValidation {
                     message: format!(
                         "[observables].theta_2.method = {other:?} is not a recognized value \
-                         (supported: \"zero\")"
+                         (supported: \"zero\", \"lda\")"
                     ),
                 });
             }

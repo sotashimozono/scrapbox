@@ -1,5 +1,7 @@
 //! Layer 6 — quantum-thermodynamics observables bundle.
 
+pub mod theta_2_lda;
+
 use serde::{Deserialize, Serialize};
 
 /// Observable bundle dumped by the runner.
