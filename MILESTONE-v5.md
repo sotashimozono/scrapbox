@@ -87,9 +87,12 @@ with BALDA xc; other XC kinds error with an actionable message.
 ## Acceptance gates
 
 - **α.1 - LDA Theta_2 symmetries**: zero at `U=0`, zero for uniform
-  quench, zero at empty band (5 lib tests in `theta_2_lda`).
-- **α.2 - dispatcher rejects non-BALDA XC**: returns
-  `ConfigValidation` error with coupling-requirement message.
+  quench, zero at empty band, zero at saturated band, half-filling
+  kernel-maximal, large-u alpha saturation (8 symmetry tests in
+  `theta_2_lda`).
+- **α.2 - dispatcher rejects bad inputs**: returns `ConfigValidation`
+  for non-BALDA XC (coupling requirement), negative `U/t` (BALDA
+  domain), and non-physical density outside `[0, 2]` (upstream bug).
 - **α.3 - BALDA dimer non-commuting quench**: LDA Theta_2 reduces
   `|FDR residual|` relative to `method = "zero"` baseline
   (`tests/lda_theta_2_e2e.rs`).
@@ -112,7 +115,7 @@ with BALDA xc; other XC kinds error with an actionable message.
 
 *(Snapshot - authoritative source is `cargo test --release`.)*
 
-- 143 tests (124 unit + 19 integration), all green
+- 154 tests (133 unit + 21 integration), all green
 - `cargo clippy --release --all-targets -- -D warnings` clean
 - `cargo fmt --all -- --check` clean
 
@@ -137,7 +140,7 @@ with BALDA xc; other XC kinds error with an actionable message.
 - `notes/discipline/PHASES.md` - milestone definitions.
 - `notes/discipline/ACCEPTANCE.md` - mechanical gates.
 - [`notes/todo/CHANGELOG.md`](notes/todo/CHANGELOG.md) - per-batch log.
-- Palamara 2024 - generalized FDR + `Theta_2` definition.
+- Palamara, Plata, Pekola, Goold, *Phys. Rev. Lett.* 133, 207101 (2024) - generalized FDR + `Theta_2` definition.
 - Lima, Silva, Capelle, PRL 90, 146402 (2003) - BALDA + `beta_Lima(u)`.
 - Sugiura, Shimizu, PRL 108, 240401 (2012); 111, 010401 (2013) - TPQ
   formulation.
