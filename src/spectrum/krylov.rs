@@ -263,6 +263,42 @@ fn finalize(
     (y, m)
 }
 
+/// User-facing Krylov subspace sizing strategy. `Fixed` uses a fixed
+/// `m`-step Lanczos (cheaper if you know the right size). `Adaptive`
+/// stops when the Saad 1992 posteriori residual bound falls below
+/// `tol`, capped at `max_m`.
+#[derive(Debug, Clone, Copy)]
+pub enum KrylovSpec {
+    /// Fixed `m`-step Lanczos.
+    Fixed {
+        /// Number of Lanczos steps.
+        m: usize,
+    },
+    /// Adaptive Lanczos via Saad 1992 posteriori residual bound.
+    Adaptive {
+        /// Stop when residual estimate falls below `tol`.
+        tol: f64,
+        /// Maximum subspace dimension before forced stop.
+        max_m: usize,
+    },
+}
+
+/// Dispatch [`expm_apply`] or [`expm_apply_adaptive`] depending on the
+/// `spec`. Returns just the result vector; the adaptive `m_used` is
+/// dropped (use `expm_apply_adaptive` directly if you need it).
+#[must_use]
+pub fn expm_apply_with_spec<O: LinearOperator>(
+    op: &O,
+    scale: f64,
+    psi: &[f64],
+    spec: KrylovSpec,
+) -> Vec<f64> {
+    match spec {
+        KrylovSpec::Fixed { m } => expm_apply(op, scale, psi, m),
+        KrylovSpec::Adaptive { tol, max_m } => expm_apply_adaptive(op, scale, psi, tol, max_m).0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

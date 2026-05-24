@@ -42,6 +42,7 @@
 //! `psi_re^T W psi_im = psi_im^T W psi_re` when `W = W^T`.
 
 use super::ed::EdResult;
+use crate::spectrum::krylov::{expm_apply_with_spec, KrylovSpec};
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
@@ -491,15 +492,15 @@ fn sample_complex_psi_beta(
 /// where `EdResult` is available, [`tpq_density`] is faster (no
 /// per-sample Krylov build).
 ///
-/// `krylov_m` is the Lanczos subspace dimension per sample; 30 is a
-/// reasonable default for moderate `beta` (~ 2).
+/// `spec` selects fixed-`m` Lanczos via `KrylovSpec::Fixed { m }` or
+/// adaptive Saad-bound truncation via `KrylovSpec::Adaptive { tol, max_m }`.
 #[must_use]
 pub fn tpq_density_matrix_free(
     jw: &crate::spectrum::hubbard_jw::JwHubbard,
     beta: f64,
     n_samples: usize,
     seed: u64,
-    krylov_m: usize,
+    spec: KrylovSpec,
 ) -> Vec<f64> {
     use crate::spectrum::linear_operator::LinearOperator;
     assert!(n_samples > 0, "n_samples must be >= 1");
@@ -514,7 +515,7 @@ pub fn tpq_density_matrix_free(
 
     for _ in 0..n_samples {
         let psi_0: Vec<f64> = (0..dim).map(|_| box_muller(&mut rng)).collect();
-        let psi_beta = crate::spectrum::krylov::expm_apply(jw, -beta * 0.5, &psi_0, krylov_m);
+        let psi_beta = expm_apply_with_spec(jw, -beta * 0.5, &psi_0, spec);
 
         let mut sample_norm_sq = 0.0_f64;
         for &p in &psi_beta {
@@ -554,9 +555,8 @@ pub fn tpq_density_matrix_free(
 /// same basis ordering (caller's responsibility -- this only checks
 /// dimension).
 ///
-/// `krylov_m` is the Lanczos subspace dimension used per sample for
-/// the `exp(-beta H_init / 2)` projection; 30 is reasonable for moderate
-/// `beta` (~ 2).
+/// `spec` selects fixed-`m` Lanczos via `KrylovSpec::Fixed { m }` or
+/// adaptive Saad-bound truncation via `KrylovSpec::Adaptive { tol, max_m }`.
 #[must_use]
 pub fn tpq_work_statistics_matrix_free<O1, O2>(
     h_init: &O1,
@@ -564,7 +564,7 @@ pub fn tpq_work_statistics_matrix_free<O1, O2>(
     beta: f64,
     n_samples: usize,
     seed: u64,
-    krylov_m: usize,
+    spec: KrylovSpec,
 ) -> TpqWorkStats
 where
     O1: crate::spectrum::linear_operator::LinearOperator,
@@ -589,7 +589,7 @@ where
 
     for _ in 0..n_samples {
         let psi_0: Vec<f64> = (0..dim).map(|_| box_muller(&mut rng)).collect();
-        let psi_beta = crate::spectrum::krylov::expm_apply(h_init, -beta * 0.5, &psi_0, krylov_m);
+        let psi_beta = expm_apply_with_spec(h_init, -beta * 0.5, &psi_0, spec);
 
         let mut h_init_psi = vec![0.0_f64; dim];
         h_init.apply(&psi_beta, &mut h_init_psi);
@@ -656,7 +656,7 @@ pub fn tpq_density_matrix_free_complex(
     beta: f64,
     n_samples: usize,
     seed: u64,
-    krylov_m: usize,
+    spec: KrylovSpec,
 ) -> Vec<f64> {
     use crate::spectrum::linear_operator::LinearOperator;
     assert!(n_samples > 0, "n_samples must be >= 1");
@@ -678,8 +678,8 @@ pub fn tpq_density_matrix_free_complex(
             psi_re_0[j] = scale * a;
             psi_im_0[j] = scale * b;
         }
-        let psi_re = crate::spectrum::krylov::expm_apply(jw, -beta * 0.5, &psi_re_0, krylov_m);
-        let psi_im = crate::spectrum::krylov::expm_apply(jw, -beta * 0.5, &psi_im_0, krylov_m);
+        let psi_re = expm_apply_with_spec(jw, -beta * 0.5, &psi_re_0, spec);
+        let psi_im = expm_apply_with_spec(jw, -beta * 0.5, &psi_im_0, spec);
 
         let mut sample_norm_sq = 0.0_f64;
         for j in 0..dim {
@@ -716,7 +716,7 @@ pub fn tpq_work_statistics_matrix_free_complex<O1, O2>(
     beta: f64,
     n_samples: usize,
     seed: u64,
-    krylov_m: usize,
+    spec: KrylovSpec,
 ) -> TpqWorkStats
 where
     O1: crate::spectrum::linear_operator::LinearOperator,
@@ -748,8 +748,8 @@ where
             psi_re_0[j] = scale * a;
             psi_im_0[j] = scale * b;
         }
-        let psi_re = crate::spectrum::krylov::expm_apply(h_init, -beta * 0.5, &psi_re_0, krylov_m);
-        let psi_im = crate::spectrum::krylov::expm_apply(h_init, -beta * 0.5, &psi_im_0, krylov_m);
+        let psi_re = expm_apply_with_spec(h_init, -beta * 0.5, &psi_re_0, spec);
+        let psi_im = expm_apply_with_spec(h_init, -beta * 0.5, &psi_im_0, spec);
 
         let mut h_init_psi_re = vec![0.0_f64; dim];
         h_init.apply(&psi_re, &mut h_init_psi_re);
@@ -1078,7 +1078,7 @@ mod tests {
         let n_ed = ed::thermal_density(&ed_result, 2.0);
 
         let jw = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v);
-        let n_mf = tpq_density_matrix_free(&jw, 2.0, 500, 7, 30);
+        let n_mf = tpq_density_matrix_free(&jw, 2.0, 500, 7, KrylovSpec::Fixed { m: 30 });
 
         for i in 0..4 {
             assert!(
@@ -1094,7 +1094,7 @@ mod tests {
     fn tpq_density_matrix_free_dimer_half_filling_density_is_one() {
         use crate::spectrum::hubbard_jw::JwHubbard;
         let jw = JwHubbard::new(2, 1, 1, 1.0, 4.0, &[0.0, 0.0]);
-        let d = tpq_density_matrix_free(&jw, 2.0, 60, 42, 8);
+        let d = tpq_density_matrix_free(&jw, 2.0, 60, 42, KrylovSpec::Fixed { m: 8 });
         for (i, &n) in d.iter().enumerate() {
             assert!(
                 (n - 1.0).abs() < 0.15,
@@ -1107,8 +1107,8 @@ mod tests {
     fn tpq_density_matrix_free_deterministic_with_same_seed() {
         use crate::spectrum::hubbard_jw::JwHubbard;
         let jw = JwHubbard::new(2, 1, 1, 1.0, 4.0, &[0.0, 0.0]);
-        let a = tpq_density_matrix_free(&jw, 2.0, 20, 99, 8);
-        let b = tpq_density_matrix_free(&jw, 2.0, 20, 99, 8);
+        let a = tpq_density_matrix_free(&jw, 2.0, 20, 99, KrylovSpec::Fixed { m: 8 });
+        let b = tpq_density_matrix_free(&jw, 2.0, 20, 99, KrylovSpec::Fixed { m: 8 });
         for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
             assert!((x - y).abs() < 1e-12, "site {i}: not reproducible");
         }
@@ -1119,7 +1119,8 @@ mod tests {
         use crate::spectrum::hubbard_jw::JwHubbard;
         let v = [0.0_f64; 4];
         let jw = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v);
-        let stats = tpq_work_statistics_matrix_free(&jw, &jw, 2.0, 30, 11, 30);
+        let stats =
+            tpq_work_statistics_matrix_free(&jw, &jw, 2.0, 30, 11, KrylovSpec::Fixed { m: 30 });
         assert!(stats.mean_w.abs() < 1e-9, "got mean_w = {}", stats.mean_w);
         assert!(
             stats.work_variance.abs() < 1e-9,
@@ -1140,7 +1141,14 @@ mod tests {
         let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
 
         let ed_stats = tpq_work_statistics(&ed_init, &ed_final, 2.0, 600, 7);
-        let mf_stats = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, 600, 7, 30);
+        let mf_stats = tpq_work_statistics_matrix_free(
+            &jw_init,
+            &jw_final,
+            2.0,
+            600,
+            7,
+            KrylovSpec::Fixed { m: 30 },
+        );
 
         // Both paths use the same RNG seed but draw psi_0 in the same
         // basis; the Krylov projection vs eigen-basis projection differ
@@ -1164,8 +1172,22 @@ mod tests {
         use crate::spectrum::hubbard_jw::JwHubbard;
         let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &[0.0_f64; 4]);
         let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &[0.2_f64, -0.2, 0.2, -0.2]);
-        let a = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, 25, 42, 20);
-        let b = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, 25, 42, 20);
+        let a = tpq_work_statistics_matrix_free(
+            &jw_init,
+            &jw_final,
+            2.0,
+            25,
+            42,
+            KrylovSpec::Fixed { m: 20 },
+        );
+        let b = tpq_work_statistics_matrix_free(
+            &jw_init,
+            &jw_final,
+            2.0,
+            25,
+            42,
+            KrylovSpec::Fixed { m: 20 },
+        );
         assert!((a.mean_w - b.mean_w).abs() < 1e-14);
         assert!((a.work_variance - b.work_variance).abs() < 1e-14);
     }
@@ -1177,7 +1199,7 @@ mod tests {
         let ed_result = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v);
         let n_ed = ed::thermal_density(&ed_result, 2.0);
         let jw = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v);
-        let n_mf = tpq_density_matrix_free_complex(&jw, 2.0, 500, 7, 30);
+        let n_mf = tpq_density_matrix_free_complex(&jw, 2.0, 500, 7, KrylovSpec::Fixed { m: 30 });
         for i in 0..4 {
             assert!(
                 (n_mf[i] - n_ed[i]).abs() < 0.05,
@@ -1199,8 +1221,14 @@ mod tests {
         let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
 
         let ed_stats = tpq_work_statistics(&ed_init, &ed_final, 2.0, 600, 7);
-        let mf_stats =
-            tpq_work_statistics_matrix_free_complex(&jw_init, &jw_final, 2.0, 600, 7, 30);
+        let mf_stats = tpq_work_statistics_matrix_free_complex(
+            &jw_init,
+            &jw_final,
+            2.0,
+            600,
+            7,
+            KrylovSpec::Fixed { m: 30 },
+        );
 
         assert!(
             (mf_stats.mean_w - ed_stats.mean_w).abs() < 0.05,
@@ -1224,8 +1252,22 @@ mod tests {
         let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_init);
         let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
         let n = 800;
-        let mf_real = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, n, 13, 30);
-        let mf_cplx = tpq_work_statistics_matrix_free_complex(&jw_init, &jw_final, 2.0, n, 13, 30);
+        let mf_real = tpq_work_statistics_matrix_free(
+            &jw_init,
+            &jw_final,
+            2.0,
+            n,
+            13,
+            KrylovSpec::Fixed { m: 30 },
+        );
+        let mf_cplx = tpq_work_statistics_matrix_free_complex(
+            &jw_init,
+            &jw_final,
+            2.0,
+            n,
+            13,
+            KrylovSpec::Fixed { m: 30 },
+        );
         let ratio = mf_cplx.mean_w_stderr / mf_real.mean_w_stderr;
         assert!(
             ratio < 0.85,
@@ -1240,8 +1282,8 @@ mod tests {
     fn tpq_density_mf_complex_deterministic_with_same_seed() {
         use crate::spectrum::hubbard_jw::JwHubbard;
         let jw = JwHubbard::new(2, 1, 1, 1.0, 4.0, &[0.0, 0.0]);
-        let a = tpq_density_matrix_free_complex(&jw, 2.0, 20, 99, 8);
-        let b = tpq_density_matrix_free_complex(&jw, 2.0, 20, 99, 8);
+        let a = tpq_density_matrix_free_complex(&jw, 2.0, 20, 99, KrylovSpec::Fixed { m: 8 });
+        let b = tpq_density_matrix_free_complex(&jw, 2.0, 20, 99, KrylovSpec::Fixed { m: 8 });
         for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
             assert!((x - y).abs() < 1e-12, "site {i}: not reproducible");
         }
