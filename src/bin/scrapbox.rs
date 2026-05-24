@@ -170,10 +170,19 @@ fn tpq_subcommand(config_path: &str) -> Result<()> {
             dim,
             n_samples,
             wall_time_ms,
+            krylov_stats,
             ..
         } => {
+            let krylov = krylov_stats
+                .map(|k| {
+                    format!(
+                        " [krylov m: min={}, max={}, mean={:.1}]",
+                        k.min_m, k.max_m, k.mean_m
+                    )
+                })
+                .unwrap_or_default();
             eprintln!(
-                "scrapbox tpq: kind = density, source = {source}, dim = {dim}, samples = {n_samples} (wall {wall_time_ms} ms) -> {dir}",
+                "scrapbox tpq: kind = density, source = {source}, dim = {dim}, samples = {n_samples}{krylov} (wall {wall_time_ms} ms) -> {dir}",
                 dir = resolved.display()
             );
         }
@@ -185,10 +194,19 @@ fn tpq_subcommand(config_path: &str) -> Result<()> {
             work_variance,
             mean_w_stderr,
             wall_time_ms,
+            krylov_stats,
             ..
         } => {
+            let krylov = krylov_stats
+                .map(|k| {
+                    format!(
+                        " [krylov m: min={}, max={}, mean={:.1}]",
+                        k.min_m, k.max_m, k.mean_m
+                    )
+                })
+                .unwrap_or_default();
             eprintln!(
-                "scrapbox tpq: kind = work_statistics, source = {source}, dim = {dim}, samples = {n_samples}, <W> = {mean_w:.6} (+/- {mean_w_stderr:.4}), sigma_W^2 = {work_variance:.6} (wall {wall_time_ms} ms) -> {dir}",
+                "scrapbox tpq: kind = work_statistics, source = {source}, dim = {dim}, samples = {n_samples}, <W> = {mean_w:.6} (+/- {mean_w_stderr:.4}), sigma_W^2 = {work_variance:.6}{krylov} (wall {wall_time_ms} ms) -> {dir}",
                 dir = resolved.display()
             );
         }
@@ -198,10 +216,19 @@ fn tpq_subcommand(config_path: &str) -> Result<()> {
             beta,
             theta_2,
             wall_time_ms,
+            krylov_stats,
             ..
         } => {
+            let krylov = krylov_stats
+                .map(|k| {
+                    format!(
+                        " [krylov m: min={}, max={}, mean={:.1}]",
+                        k.min_m, k.max_m, k.mean_m
+                    )
+                })
+                .unwrap_or_default();
             eprintln!(
-                "scrapbox tpq: kind = theta_2, source = {source}, dim = {dim}, beta = {beta}, theta_2 = {theta_2:.6} (wall {wall_time_ms} ms) -> {dir}",
+                "scrapbox tpq: kind = theta_2, source = {source}, dim = {dim}, beta = {beta}, theta_2 = {theta_2:.6}{krylov} (wall {wall_time_ms} ms) -> {dir}",
                 dir = resolved.display()
             );
         }
