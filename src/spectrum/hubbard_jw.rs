@@ -39,6 +39,25 @@ pub struct JwHubbard {
 }
 
 impl JwHubbard {
+    /// Number of lattice sites L.
+    #[must_use]
+    pub fn num_sites(&self) -> usize {
+        self.num_sites
+    }
+
+    /// Per-row joint Jordan-Wigner masks (up_mask, dn_mask). Row index
+    /// matches the LinearOperator basis ordering: r = up_idx * m_dn + dn_idx.
+    #[must_use]
+    pub fn joint_masks(&self) -> Vec<(u32, u32)> {
+        let mut out = Vec::with_capacity(self.dim());
+        for &up in &self.basis_up {
+            for &dn in &self.basis_dn {
+                out.push((up, dn));
+            }
+        }
+        out
+    }
+
     /// Build the operator for a given particle-number sector. `v_ext.len()`
     /// must equal `num_sites`.
     #[must_use]
