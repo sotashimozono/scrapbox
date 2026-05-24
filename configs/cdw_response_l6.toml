@@ -46,7 +46,7 @@ free_energy = true
 partition_function = true
 
 [output]
-directory = "runs/cdw_response_l6_PLACEHOLDER"
+directory = "runs/cdw_response_l6"
 format = "json"
 dump_density = true
 dump_spectrum = false

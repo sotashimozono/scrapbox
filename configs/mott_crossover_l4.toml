@@ -2,7 +2,7 @@ schema_version = "0.2"
 
 [meta]
 name = "mott_crossover_l4"
-description = "L=4 half-filled Hubbard with small comb V; sweep U from 0 to 16 to show Mott-localization weakening the density response."
+description = "L=4 half-filled Hubbard with small comb V; sweep U from 0 to 3 (onset Mott regime - deep-Mott U>=4 awaits BALDA + tighter mixing)."
 created = "2026-05-24"
 tags = ["v0.4", "demo", "mott"]
 
@@ -45,7 +45,7 @@ free_energy = true
 partition_function = true
 
 [output]
-directory = "runs/mott_crossover_l4_PLACEHOLDER"
+directory = "runs/mott_crossover_l4"
 format = "json"
 dump_density = true
 dump_spectrum = false

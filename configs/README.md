@@ -14,10 +14,9 @@ scrapbox doctor   <config.toml>     # parse + layer-construction check
 
 | Config | Subcommand | What it does |
 |---|---|---|
-| `dimer_smoke.toml` | `run` | minimal `L=2` smoke test (1 SCF iter at half-filling) |
+| `dimer_smoke.toml` | `run` / `doctor` | minimal `L=2` smoke test (1 SCF iter at half-filling; `doctor` exercises parse + dispatch only) |
 | `dimer_validate.toml` | `validate` | dimer with `[validation]` reference comparison |
 | `dimer_bench.toml` | `bench` | wall-clock baseline (~0.4 ms / solve on a dev box) |
-| `dimer_smoke.toml` | `doctor` | parse + dispatch sanity (no SCF) |
 
 ## Pipeline coverage
 
