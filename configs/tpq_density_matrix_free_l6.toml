@@ -1,0 +1,49 @@
+schema_version = "0.2"
+
+[meta]
+name = "tpq_density_matrix_free_l6"
+description = "L=6 matrix-free TPQ canonical thermal density via JwHubbard + Krylov exp(-beta H/2). Dim=400; dense ED works but this demo exercises the v0.7 gamma scale-out path that v0.10+ surfaces."
+created = "2026-05-24"
+tags = ["v0.11", "tpq", "matrix_free", "density", "demo"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 6
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 3
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[observables]
+
+[tpq]
+kind = "density"
+source = "matrix_free"
+n_samples = 200
+seed = 7
+krylov_m = 60
+krylov_tol = 1e-10
+
+[output]
+directory = "runs/tpq_density_matrix_free_l6"
+format = "json"
+overwrite = true
