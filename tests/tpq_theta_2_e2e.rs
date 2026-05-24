@@ -406,3 +406,52 @@ fn tpq_adaptive_krylov_density_matches_fixed_at_l4() {
     std::fs::remove_file(&cfg_fixed).ok();
     std::fs::remove_file(&cfg_adaptive).ok();
 }
+
+#[test]
+fn tpq_adaptive_krylov_emits_krylov_stats_in_json() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    // adaptive run: krylov_tol set
+    let cfg_adaptive =
+        std::path::Path::new(manifest).join("configs/_test_tpq_kstats_adaptive.toml");
+    write_tpq_density_mf_config(&cfg_adaptive, "kstats_adaptive", Some(60), Some(1e-10));
+    assert!(invoke("tpq", &cfg_adaptive).success());
+    let json_adaptive: serde_json::Value = {
+        let path = std::path::Path::new(manifest)
+            .join("runs/tpq_krylov_tol_e2e_kstats_adaptive/tpq_report.json");
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    };
+    let stats = json_adaptive
+        .get("krylov_stats")
+        .expect("adaptive run must emit krylov_stats");
+    let min_m = stats["min_m"].as_u64().expect("min_m");
+    let max_m = stats["max_m"].as_u64().expect("max_m");
+    let mean_m = stats["mean_m"].as_f64().expect("mean_m");
+    assert!(min_m >= 1, "min_m should be >= 1, got {min_m}");
+    assert!(
+        max_m <= 60,
+        "max_m should be <= krylov_m bound 60, got {max_m}"
+    );
+    assert!(
+        mean_m >= min_m as f64 && mean_m <= max_m as f64,
+        "mean_m {mean_m} not in [{min_m}, {max_m}]"
+    );
+
+    // fixed run: krylov_tol absent -> krylov_stats also present (since matrix_free always emits)
+    // but min == max == m for fixed
+    let cfg_fixed = std::path::Path::new(manifest).join("configs/_test_tpq_kstats_fixed.toml");
+    write_tpq_density_mf_config(&cfg_fixed, "kstats_fixed", Some(30), None);
+    assert!(invoke("tpq", &cfg_fixed).success());
+    let json_fixed: serde_json::Value = {
+        let path = std::path::Path::new(manifest)
+            .join("runs/tpq_krylov_tol_e2e_kstats_fixed/tpq_report.json");
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap()
+    };
+    let stats_f = json_fixed
+        .get("krylov_stats")
+        .expect("fixed matrix_free run must emit krylov_stats too");
+    assert_eq!(stats_f["min_m"].as_u64().unwrap(), 30);
+    assert_eq!(stats_f["max_m"].as_u64().unwrap(), 30);
+
+    std::fs::remove_file(&cfg_adaptive).ok();
+    std::fs::remove_file(&cfg_fixed).ok();
+}

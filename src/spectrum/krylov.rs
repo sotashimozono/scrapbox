@@ -263,6 +263,38 @@ fn finalize(
     (y, m)
 }
 
+/// Per-sample Krylov diagnostics collected over a TPQ run. For
+/// `KrylovSpec::Fixed` the three fields collapse trivially to the
+/// same `m`. For `KrylovSpec::Adaptive` they expose the spread of
+/// subspace sizes the Saad bound settled on across samples; surfaced
+/// in `tpq_report.json` so users can tune `krylov_tol`.
+#[derive(Debug, Clone, Copy)]
+pub struct KrylovStats {
+    /// Smallest `m_used` across samples.
+    pub min_m: usize,
+    /// Largest `m_used` across samples.
+    pub max_m: usize,
+    /// Mean `m_used` across samples.
+    pub mean_m: f64,
+}
+
+impl KrylovStats {
+    /// Build from per-sample `m_used`. Panics if `m_used.is_empty()`.
+    #[must_use]
+    pub fn from_samples(m_used: &[usize]) -> Self {
+        assert!(!m_used.is_empty(), "KrylovStats::from_samples: empty input");
+        let min_m = *m_used.iter().min().expect("non-empty");
+        let max_m = *m_used.iter().max().expect("non-empty");
+        let sum: usize = m_used.iter().sum();
+        let mean_m = sum as f64 / m_used.len() as f64;
+        Self {
+            min_m,
+            max_m,
+            mean_m,
+        }
+    }
+}
+
 /// User-facing Krylov subspace sizing strategy. `Fixed` uses a fixed
 /// `m`-step Lanczos (cheaper if you know the right size). `Adaptive`
 /// stops when the Saad 1992 posteriori residual bound falls below
@@ -293,9 +325,25 @@ pub fn expm_apply_with_spec<O: LinearOperator>(
     psi: &[f64],
     spec: KrylovSpec,
 ) -> Vec<f64> {
+    expm_apply_with_spec_m(op, scale, psi, spec).0
+}
+
+/// Variant of [`expm_apply_with_spec`] that also returns the Krylov
+/// subspace size actually used. For [`KrylovSpec::Fixed { m }`] this is
+/// trivially `m`; for [`KrylovSpec::Adaptive`] this is the value the
+/// Saad 1992 stopping criterion settled on. Useful for diagnostics
+/// (e.g. surfacing `min_m / max_m / mean_m` in TPQ output JSON to
+/// help users tune `krylov_tol`).
+#[must_use]
+pub fn expm_apply_with_spec_m<O: LinearOperator>(
+    op: &O,
+    scale: f64,
+    psi: &[f64],
+    spec: KrylovSpec,
+) -> (Vec<f64>, usize) {
     match spec {
-        KrylovSpec::Fixed { m } => expm_apply(op, scale, psi, m),
-        KrylovSpec::Adaptive { tol, max_m } => expm_apply_adaptive(op, scale, psi, tol, max_m).0,
+        KrylovSpec::Fixed { m } => (expm_apply(op, scale, psi, m), m),
+        KrylovSpec::Adaptive { tol, max_m } => expm_apply_adaptive(op, scale, psi, tol, max_m),
     }
 }
 

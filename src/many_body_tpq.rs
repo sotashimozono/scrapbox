@@ -16,11 +16,28 @@ use crate::config::{Config, Quench, TpqKind, TpqSource, TpqSpec};
 use crate::error::{Result, ScrapboxError};
 use crate::reference::{ed, tpq};
 use crate::spectrum::hubbard_jw::JwHubbard;
-use crate::spectrum::krylov::KrylovSpec;
+use crate::spectrum::krylov::{KrylovSpec, KrylovStats};
 use crate::spectrum::linear_operator::LinearOperator;
 use serde::Serialize;
 use std::path::Path;
 use std::time::Instant;
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct KrylovStatsJson {
+    pub min_m: usize,
+    pub max_m: usize,
+    pub mean_m: f64,
+}
+
+impl From<KrylovStats> for KrylovStatsJson {
+    fn from(s: KrylovStats) -> Self {
+        Self {
+            min_m: s.min_m,
+            max_m: s.max_m,
+            mean_m: s.mean_m,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -33,6 +50,8 @@ pub enum TpqRunOutput {
         beta: f64,
         density: Vec<f64>,
         wall_time_ms: u128,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        krylov_stats: Option<KrylovStatsJson>,
     },
     WorkStatistics {
         source: &'static str,
@@ -44,6 +63,8 @@ pub enum TpqRunOutput {
         work_variance: f64,
         mean_w_stderr: f64,
         wall_time_ms: u128,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        krylov_stats: Option<KrylovStatsJson>,
     },
     Theta2 {
         source: &'static str,
@@ -51,6 +72,8 @@ pub enum TpqRunOutput {
         beta: f64,
         theta_2: f64,
         wall_time_ms: u128,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        krylov_stats: Option<KrylovStatsJson>,
     },
 }
 
@@ -124,6 +147,7 @@ fn run_density_ed(
         beta,
         density,
         wall_time_ms: elapsed,
+        krylov_stats: None,
     }
 }
 
@@ -158,7 +182,8 @@ fn run_density_mf(
     let dim = jw.dim();
     let spec = krylov_spec_from(tpq_cfg);
     let start = Instant::now();
-    let density = tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, tpq_cfg.seed, spec);
+    let (density, krylov_stats) =
+        tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, tpq_cfg.seed, spec);
     let elapsed = start.elapsed().as_millis();
     TpqRunOutput::Density {
         source: "matrix_free",
@@ -168,6 +193,7 @@ fn run_density_mf(
         beta,
         density,
         wall_time_ms: elapsed,
+        krylov_stats: Some(KrylovStatsJson::from(krylov_stats)),
     }
 }
 
@@ -221,6 +247,7 @@ fn run_work_ed(
         work_variance: stats.work_variance,
         mean_w_stderr: stats.mean_w_stderr,
         wall_time_ms: elapsed,
+        krylov_stats: None,
     })
 }
 
@@ -252,7 +279,7 @@ fn run_work_mf(
     let dim = jw_init.dim();
     let spec = krylov_spec_from(tpq_cfg);
     let start = Instant::now();
-    let stats = tpq::tpq_work_statistics_matrix_free(
+    let (stats, krylov_stats) = tpq::tpq_work_statistics_matrix_free(
         &jw_init,
         &jw_final,
         beta,
@@ -271,6 +298,7 @@ fn run_work_mf(
         work_variance: stats.work_variance,
         mean_w_stderr: stats.mean_w_stderr,
         wall_time_ms: elapsed,
+        krylov_stats: Some(KrylovStatsJson::from(krylov_stats)),
     })
 }
 
@@ -308,6 +336,7 @@ fn run_theta_2_ed(
         beta,
         theta_2,
         wall_time_ms: elapsed,
+        krylov_stats: None,
     })
 }
 
@@ -352,6 +381,7 @@ fn run_theta_2_mf(
         beta,
         theta_2,
         wall_time_ms: elapsed,
+        krylov_stats: None,
     })
 }
 
