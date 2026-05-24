@@ -52,20 +52,8 @@ fn main() -> ExitCode {
             }
         },
         "sweep" => dispatch(sweep_subcommand(config_path)),
-        "bench" | "doctor" => match Config::from_file(config_path) {
-            Ok(cfg) => {
-                eprintln!(
-                    "scrapbox {subcommand}: parsed config '{name}' \
-                     (subcommand body not implemented yet).",
-                    name = cfg.meta.name
-                );
-                ExitCode::from(2)
-            }
-            Err(e) => {
-                eprintln!("scrapbox {subcommand}: {e}");
-                ExitCode::from(1)
-            }
-        },
+        "bench" => dispatch(bench_subcommand(config_path)),
+        "doctor" => dispatch(doctor_subcommand(config_path)),
         _ => {
             eprintln!("scrapbox: unknown subcommand '{subcommand}'\n\n{USAGE}");
             ExitCode::from(2)
@@ -142,4 +130,12 @@ fn validate_subcommand(config_path: &str) -> Result<bool> {
 
 fn sweep_subcommand(config_path: &str) -> Result<()> {
     scrapbox::sweep::run(std::path::Path::new(config_path))
+}
+
+fn bench_subcommand(config_path: &str) -> Result<()> {
+    scrapbox::bench::run(std::path::Path::new(config_path))
+}
+
+fn doctor_subcommand(config_path: &str) -> Result<()> {
+    scrapbox::doctor::run(std::path::Path::new(config_path))
 }

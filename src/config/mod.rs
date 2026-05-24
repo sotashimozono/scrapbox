@@ -47,6 +47,9 @@ pub struct Config {
     /// Parameter grid — optional, drives `scrapbox sweep`.
     #[serde(default)]
     pub sweep: Option<Sweep>,
+    /// Wall-clock benchmark spec — optional, drives `scrapbox bench`.
+    #[serde(default)]
+    pub bench: Option<Bench>,
 }
 
 impl Config {
@@ -236,8 +239,65 @@ pub enum XcFunctional {
         #[serde(default)]
         params: HubbardLdaParams,
     },
+    /// BALDA — Bethe-ansatz LDA (Lima, Silva, Capelle 2003 PRL 90 146402).
+    Balda {
+        /// Numerical parameters.
+        #[serde(default)]
+        params: BaldaParams,
+    },
     /// Set `λ^{h-xc} = 0` everywhere.
     NonInteracting,
+}
+
+/// Numerical parameters for the BALDA xc functional.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BaldaParams {
+    /// Density clamp `η` near `n_i → 0` or `n_i → 2`.
+    #[serde(default = "default_clamp_eta")]
+    pub clamp_eta: f64,
+    /// Lieb-Wu Simpson interval count (must be even).
+    #[serde(default = "default_lieb_simpson_intervals")]
+    pub lieb_simpson_intervals: usize,
+    /// Bisection cap when solving for `β(u)`.
+    #[serde(default = "default_beta_max_bisect_iter")]
+    pub beta_max_bisect_iter: usize,
+    /// Bisection tolerance.
+    #[serde(default = "default_beta_tol")]
+    pub beta_tol: f64,
+    /// Linear-blend half-width `δ` across the n=1 Mott-gap discontinuity
+    /// for SCF stability. Set to 0 to disable smoothing (matches Lima
+    /// 2003 raw). Default 0.02.
+    #[serde(default = "default_mott_gap_smoothing_width")]
+    pub mott_gap_smoothing_width: f64,
+}
+
+impl Default for BaldaParams {
+    fn default() -> Self {
+        Self {
+            clamp_eta: default_clamp_eta(),
+            lieb_simpson_intervals: default_lieb_simpson_intervals(),
+            beta_max_bisect_iter: default_beta_max_bisect_iter(),
+            beta_tol: default_beta_tol(),
+            mott_gap_smoothing_width: default_mott_gap_smoothing_width(),
+        }
+    }
+}
+
+const fn default_mott_gap_smoothing_width() -> f64 {
+    0.02
+}
+
+const fn default_lieb_simpson_intervals() -> usize {
+    4096
+}
+
+const fn default_beta_max_bisect_iter() -> usize {
+    80
+}
+
+const fn default_beta_tol() -> f64 {
+    1.0e-13
 }
 
 /// Numerical parameters for the Hubbard LDA xc functional.
@@ -586,6 +646,39 @@ impl SweepAxis {
 
 const fn default_sweep_parallelism() -> usize {
     1
+}
+
+// ─── Bench ─────────────────────────────────────────────────────────────
+
+/// Wall-clock benchmark spec for `scrapbox bench`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bench {
+    /// Warm-up iterations (excluded from timing stats). May be 0.
+    #[serde(default = "default_bench_warmup")]
+    pub warmup: usize,
+    /// Measured iterations (included in timing stats). Must be >= 1
+    /// (enforced at runtime in `bench::run`). p95 is only statistically
+    /// meaningful for `measured >= 20`; below that it tracks `max_ms`.
+    #[serde(default = "default_bench_measured")]
+    pub measured: usize,
+}
+
+impl Default for Bench {
+    fn default() -> Self {
+        Self {
+            warmup: default_bench_warmup(),
+            measured: default_bench_measured(),
+        }
+    }
+}
+
+const fn default_bench_warmup() -> usize {
+    1
+}
+
+const fn default_bench_measured() -> usize {
+    5
 }
 
 #[cfg(test)]
