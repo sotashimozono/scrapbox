@@ -1275,6 +1275,7 @@ name = "scrapbox"
 version = "0.1.0"
 dependencies = [
  "faer",
+ "libm",
  "ndarray",
  "proptest",
  "rand 0.8.6",

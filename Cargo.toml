@@ -37,6 +37,9 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# Bessel functions for reference::bethe::lieb_wu integral.
+libm = "0.2"
+
 [dev-dependencies]
 # Property-based testing for invariants (Pratt sum-rule, generalized FDR).
 proptest = "1.4"
