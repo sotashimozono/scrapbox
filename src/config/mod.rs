@@ -723,6 +723,10 @@ pub enum TpqKind {
     Density,
     /// Sudden-quench canonical work statistics.
     WorkStatistics,
+    /// Palamara 2024 III.3 off-diagonal work-variance contribution
+    /// (the quantum part of the FDR). Requires `[quench]`.
+    #[serde(rename = "theta_2")]
+    Theta2,
 }
 
 /// Which backend to drive the TPQ sampler.

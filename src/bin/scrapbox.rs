@@ -192,6 +192,19 @@ fn tpq_subcommand(config_path: &str) -> Result<()> {
                 dir = resolved.display()
             );
         }
+        TpqRunOutput::Theta2 {
+            source,
+            dim,
+            beta,
+            theta_2,
+            wall_time_ms,
+            ..
+        } => {
+            eprintln!(
+                "scrapbox tpq: kind = theta_2, source = {source}, dim = {dim}, beta = {beta}, theta_2 = {theta_2:.6} (wall {wall_time_ms} ms) -> {dir}",
+                dir = resolved.display()
+            );
+        }
     }
     Ok(())
 }
