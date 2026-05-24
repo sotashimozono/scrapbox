@@ -543,6 +543,106 @@ pub fn tpq_density_matrix_free(
     acc_density
 }
 
+/// Two-Hamiltonian matrix-free TPQ work statistics for a sudden quench
+/// `H_init -> H_final`, both supplied as [`LinearOperator`]s.
+///
+/// Mirrors [`tpq_work_statistics`] (which takes ED `EdResult`s) but runs
+/// entirely matrix-free: the canonical thermal state is built via
+/// [`crate::spectrum::krylov::expm_apply`] on `h_init`, and the work
+/// operator `W = H_final - H_init` is applied as two direct matvecs on
+/// `psi_beta`. No dim x dim matrix is ever materialised.
+///
+/// `h_init.dim()` must equal `h_final.dim()` and both must act on the
+/// same basis ordering (caller's responsibility -- this only checks
+/// dimension).
+///
+/// `krylov_m` is the Lanczos subspace dimension used per sample for
+/// the `exp(-beta H_init / 2)` projection; 30 is reasonable for moderate
+/// `beta` (~ 2).
+#[must_use]
+pub fn tpq_work_statistics_matrix_free<O1, O2>(
+    h_init: &O1,
+    h_final: &O2,
+    beta: f64,
+    n_samples: usize,
+    seed: u64,
+    krylov_m: usize,
+) -> TpqWorkStats
+where
+    O1: crate::spectrum::linear_operator::LinearOperator,
+    O2: crate::spectrum::linear_operator::LinearOperator,
+{
+    assert!(n_samples > 0, "n_samples must be >= 1");
+    let dim = h_init.dim();
+    assert_eq!(
+        dim,
+        h_final.dim(),
+        "tpq_work_statistics_matrix_free: h_init and h_final must share dim \
+         (got {} vs {})",
+        dim,
+        h_final.dim()
+    );
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut acc_num_w = 0.0_f64;
+    let mut acc_num_w_sq = 0.0_f64;
+    let mut acc_denom = 0.0_f64;
+    let mut per_sample_mean_w: Vec<f64> = Vec::with_capacity(n_samples);
+
+    for _ in 0..n_samples {
+        let psi_0: Vec<f64> = (0..dim).map(|_| box_muller(&mut rng)).collect();
+        let psi_beta = crate::spectrum::krylov::expm_apply(h_init, -beta * 0.5, &psi_0, krylov_m);
+
+        let mut h_init_psi = vec![0.0_f64; dim];
+        h_init.apply(&psi_beta, &mut h_init_psi);
+        let mut h_final_psi = vec![0.0_f64; dim];
+        h_final.apply(&psi_beta, &mut h_final_psi);
+
+        let delta_psi: Vec<f64> = h_final_psi
+            .iter()
+            .zip(h_init_psi.iter())
+            .map(|(a, b)| a - b)
+            .collect();
+
+        let num_w_i: f64 = psi_beta
+            .iter()
+            .zip(delta_psi.iter())
+            .map(|(p, d)| p * d)
+            .sum();
+        let num_w_sq_i: f64 = delta_psi.iter().map(|d| d * d).sum();
+        let denom_i: f64 = psi_beta.iter().map(|p| p * p).sum();
+
+        acc_num_w += num_w_i;
+        acc_num_w_sq += num_w_sq_i;
+        acc_denom += denom_i;
+        per_sample_mean_w.push(num_w_i / denom_i);
+    }
+
+    assert!(
+        acc_denom > 0.0,
+        "tpq_work_statistics_matrix_free: accumulated norm is zero"
+    );
+    let mean_w = acc_num_w / acc_denom;
+    let mean_w_sq = acc_num_w_sq / acc_denom;
+    let work_variance = mean_w_sq - mean_w * mean_w;
+
+    let n_f = n_samples as f64;
+    let sample_mean: f64 = per_sample_mean_w.iter().sum::<f64>() / n_f;
+    let sample_var: f64 = per_sample_mean_w
+        .iter()
+        .map(|x| (x - sample_mean).powi(2))
+        .sum::<f64>()
+        / n_f;
+    let mean_w_stderr = (sample_var / n_f).sqrt();
+
+    TpqWorkStats {
+        mean_w,
+        work_variance,
+        mean_w_stderr,
+        n_samples,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::ed;
@@ -839,5 +939,61 @@ mod tests {
         for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
             assert!((x - y).abs() < 1e-12, "site {i}: not reproducible");
         }
+    }
+
+    #[test]
+    fn tpq_work_matrix_free_zero_quench_at_l4() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v = [0.0_f64; 4];
+        let jw = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v);
+        let stats = tpq_work_statistics_matrix_free(&jw, &jw, 2.0, 30, 11, 30);
+        assert!(stats.mean_w.abs() < 1e-9, "got mean_w = {}", stats.mean_w);
+        assert!(
+            stats.work_variance.abs() < 1e-9,
+            "got work_variance = {}",
+            stats.work_variance
+        );
+    }
+
+    #[test]
+    fn tpq_work_matrix_free_matches_ed_path_at_l4_sudden_quench() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+
+        let ed_init = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_init);
+        let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
+
+        let ed_stats = tpq_work_statistics(&ed_init, &ed_final, 2.0, 600, 7);
+        let mf_stats = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, 600, 7, 30);
+
+        // Both paths use the same RNG seed but draw psi_0 in the same
+        // basis; the Krylov projection vs eigen-basis projection differ
+        // numerically, so we only require statistical agreement.
+        assert!(
+            (mf_stats.mean_w - ed_stats.mean_w).abs() < 0.05,
+            "<W>: matrix-free = {}, ED-path = {}",
+            mf_stats.mean_w,
+            ed_stats.mean_w
+        );
+        assert!(
+            (mf_stats.work_variance - ed_stats.work_variance).abs() < 0.15,
+            "sigma_W^2: matrix-free = {}, ED-path = {}",
+            mf_stats.work_variance,
+            ed_stats.work_variance
+        );
+    }
+
+    #[test]
+    fn tpq_work_matrix_free_deterministic_with_same_seed() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &[0.0_f64; 4]);
+        let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &[0.2_f64, -0.2, 0.2, -0.2]);
+        let a = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, 25, 42, 20);
+        let b = tpq_work_statistics_matrix_free(&jw_init, &jw_final, 2.0, 25, 42, 20);
+        assert!((a.mean_w - b.mean_w).abs() < 1e-14);
+        assert!((a.work_variance - b.work_variance).abs() < 1e-14);
     }
 }
