@@ -32,15 +32,11 @@ pub struct LanczosParams {
 /// Run Lanczos on a real-symmetric `n × n` matrix and return the Ritz
 /// pairs sorted ascending by eigenvalue.
 #[allow(clippy::too_many_lines)]
-pub fn diagonalize(matrix: &Mat<f64>, params: &LanczosParams) -> Result<Eigendecomposition> {
-    assert_eq!(
-        matrix.nrows(),
-        matrix.ncols(),
-        "lanczos requires a square matrix (got {}x{})",
-        matrix.nrows(),
-        matrix.ncols(),
-    );
-    let n = matrix.nrows();
+pub fn diagonalize<O: super::linear_operator::LinearOperator>(
+    matrix: &O,
+    params: &LanczosParams,
+) -> Result<Eigendecomposition> {
+    let n = matrix.dim();
     let m = params.krylov_dim.unwrap_or(n).min(n);
     if m == 0 {
         return Err(ScrapboxError::ConfigValidation {
@@ -80,7 +76,8 @@ pub fn diagonalize(matrix: &Mat<f64>, params: &LanczosParams) -> Result<Eigendec
     let mut effective_m = m;
 
     for k in 0..m {
-        let mut w = mat_vec(matrix, &v_curr);
+        let mut w = vec![0.0_f64; n];
+        matrix.apply(&v_curr, &mut w);
         if k > 0 {
             axpy(&mut w, -beta_prev, &v_prev);
         }
@@ -167,19 +164,6 @@ fn axpy(y: &mut [f64], a: f64, x: &[f64]) {
     for (yi, xi) in y.iter_mut().zip(x) {
         *yi = a.mul_add(*xi, *yi);
     }
-}
-
-fn mat_vec(m: &Mat<f64>, v: &[f64]) -> Vec<f64> {
-    let n = m.nrows();
-    let mut out = vec![0.0; n];
-    for i in 0..n {
-        let mut acc = 0.0;
-        for j in 0..n {
-            acc = m[(i, j)].mul_add(v[j], acc);
-        }
-        out[i] = acc;
-    }
-    out
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 
 pub mod dense_diag;
 pub mod lanczos;
+pub mod linear_operator;
 
 use crate::config::SpectrumSource as SpectrumConfig;
 use crate::error::Result;
