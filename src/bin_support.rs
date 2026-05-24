@@ -77,6 +77,7 @@ pub fn susceptibility_finite_difference(
 }
 
 /// Compute every observable the config requested.
+#[allow(clippy::too_many_lines)]
 pub fn compute_observables(
     cfg: &Config,
     ks_state: &crate::scf::KsState,
@@ -167,11 +168,32 @@ pub fn compute_observables(
                 &ks_state.densities,
                 &cfg.xc_functional,
             )?,
+            "exact" => {
+                let n_up = cfg.hamiltonian.num_electrons_per_spin;
+                let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+                let ed_init = crate::reference::ed::canonical_thermal(
+                    cfg.hamiltonian.num_sites,
+                    n_up,
+                    n_dn,
+                    cfg.hamiltonian.hopping_j,
+                    cfg.hamiltonian.on_site_interaction,
+                    &initial_potential,
+                );
+                let ed_final = crate::reference::ed::canonical_thermal(
+                    cfg.hamiltonian.num_sites,
+                    n_up,
+                    n_dn,
+                    cfg.hamiltonian.hopping_j,
+                    cfg.hamiltonian.on_site_interaction,
+                    &final_potential,
+                );
+                crate::reference::ed::exact_theta_2(&ed_init, &ed_final, beta)
+            }
             other => {
                 return Err(ScrapboxError::ConfigValidation {
                     message: format!(
                         "[observables].theta_2.method = {other:?} is not a recognized value \
-                         (supported: \"zero\", \"lda\")"
+                         (supported: \"zero\", \"lda\", \"exact\")"
                     ),
                 });
             }
