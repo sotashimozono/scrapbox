@@ -105,3 +105,50 @@ scrapbox tpq configs/tpq_work_matrix_free_quench_l4.toml
 ```
 scrapbox tpq configs/tpq_theta_2_matrix_free_l6.toml
 ```
+
+
+## Adaptive Krylov m sweeps (v0.12)
+
+`configs/sweeps/` holds bundles of TPQ matrix-free runs that hold all parameters fixed except one, exposing how the adaptive Krylov subspace size `m` (Saad 1992 stopping) responds to that knob. `scripts/analyze_adaptive_m.py` reads the resulting `tpq_report.json` files and prints `min_m / max_m / mean_m / wall_ms` per row.
+
+### Beta sweep (`configs/sweeps/beta_*.toml`)
+
+L = 6, dim = 400, fixed `krylov_m = 80` cap, `krylov_tol = 1e-10`, `n_samples = 100`. Varies `[hamiltonian].beta` over `{0.5, 2.0, 10.0}`:
+
+```
+for f in configs/sweeps/beta_*.toml; do scrapbox tpq "$f"; done
+python3 scripts/analyze_adaptive_m.py beta 'runs/sweep_adaptive_m_beta_*'
+```
+
+Observed:
+
+```
+      beta  min_m  max_m   mean_m  wall_ms
+--------------------------------------------
+       0.5     16     17     16.0       78
+       2.0     27     27     27.0      172
+      10.0     57     63     59.3     1888
+```
+
+Deep-cold (large `beta`) needs ~4x larger Krylov subspace; wall time scales ~24x because the `m^3` tridiagonal EVD dominates at `m ~ 60`.
+
+### Tolerance sweep (`configs/sweeps/tol_*.toml`)
+
+L = 6, dim = 400, fixed `beta = 2.0`, `krylov_m = 80` cap, `n_samples = 100`. Varies `[tpq].krylov_tol` over `{1e-14, 1e-10, 1e-6}`:
+
+```
+for f in configs/sweeps/tol_*.toml; do scrapbox tpq "$f"; done
+python3 scripts/analyze_adaptive_m.py tol 'runs/sweep_adaptive_m_tol_*'
+```
+
+Observed:
+
+```
+       tol  min_m  max_m   mean_m  wall_ms
+--------------------------------------------
+     1e-14     31     38     32.1      213
+     1e-10     27     27     27.0      147
+     1e-06     21     22     22.0       96
+```
+
+Looser `tol` lets adaptive Krylov stop earlier (~20-25%); wall time scales accordingly.
