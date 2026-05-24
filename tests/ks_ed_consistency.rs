@@ -116,3 +116,28 @@ fn l4_comb_v_ks_density_matches_ed_within_lda_error() {
         );
     }
 }
+
+#[test]
+fn l4_moderate_comb_ed_breaks_symmetry_as_expected() {
+    // ED-only check (no KS): a sizable comb V = (+0.1, -0.1, +0.1, -0.1)
+    // should give a direct electrostatic response: high-V sites depleted,
+    // low-V sites enhanced. Mass conservation: sum n = 4.
+    let v0 = 0.1;
+    let v = [v0, -v0, v0, -v0];
+    let result = ed::canonical_thermal(L, 2, 2, 1.0, 4.0, &v);
+    let n_ed = ed::thermal_density(&result, 2.0);
+    let total: f64 = n_ed.iter().sum();
+    assert!((total - 4.0).abs() < 1e-10, "mass sum = {total}");
+    assert!(
+        n_ed[0] < 1.0 && n_ed[2] < 1.0,
+        "high-V sites: {} {}",
+        n_ed[0],
+        n_ed[2]
+    );
+    assert!(
+        n_ed[1] > 1.0 && n_ed[3] > 1.0,
+        "low-V sites: {} {}",
+        n_ed[1],
+        n_ed[3]
+    );
+}

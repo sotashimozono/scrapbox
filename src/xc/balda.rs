@@ -123,7 +123,12 @@ fn solve_beta(u: f64, params: &BaldaParams) -> f64 {
         u >= 0.0,
         "BALDA bisection bracket [1, 2] maps to f in [-4/pi, 0]; u < 0 lies outside and would silently saturate at beta = 2"
     );
-    let target = lieb_wu_integral(u, params);
+    let target = crate::reference::bethe::lieb_wu_half_filling_energy_with_params(
+        u,
+        &crate::reference::bethe::LiebWuParams {
+            simpson_intervals: params.lieb_simpson_intervals,
+        },
+    );
     // f(β) = -2 β / π · sin(π / β) is monotone on [1, 2]:
     //   f(1) = -2/π · sin π = 0
     //   f(2) = -4/π · sin(π/2) = -4/π ≈ -1.273
@@ -152,35 +157,6 @@ fn solve_beta(u: f64, params: &BaldaParams) -> f64 {
         );
     }
     0.5 * (lo + hi)
-}
-
-/// `ε_h(u) = -4 ∫_0^∞ J_0(x) J_1(x) / [x (1 + exp(u x / 2))] dx`
-/// via composite Simpson on `[ε, x_max]`.
-fn lieb_wu_integral(u: f64, params: &BaldaParams) -> f64 {
-    if u.abs() < 1.0e-14 {
-        return -4.0 / std::f64::consts::PI;
-    }
-    let x_max = (60.0_f64).max(28.0 / u.max(0.05));
-    let n = params.lieb_simpson_intervals;
-    let n = if n % 2 == 0 { n } else { n + 1 };
-    let h = x_max / (n as f64);
-
-    let mut acc = 0.0_f64;
-    for i in 0..=n {
-        let x = (i as f64).mul_add(h, 1.0e-10);
-        let weight = if i == 0 || i == n {
-            1.0
-        } else if i % 2 == 0 {
-            2.0
-        } else {
-            4.0
-        };
-        let j0 = libm::j0(x);
-        let j1 = libm::j1(x);
-        let denom = x * (1.0 + (u * x / 2.0).exp());
-        acc += weight * j0 * j1 / denom;
-    }
-    -4.0 * acc * h / 3.0
 }
 
 #[cfg(test)]
