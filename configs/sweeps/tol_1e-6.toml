@@ -1,0 +1,49 @@
+schema_version = "0.2"
+
+[meta]
+name = "sweep_adaptive_m_tol_1e-6"
+description = "v0.12 gamma adaptive-m sweep demo: TPQ matrix-free density at L=6 with beta=2.0, krylov_tol=1e-06, n_samples=100. Exposes effective m chosen by Saad 1992 stopping criterion under varying parameters."
+created = "2026-05-24"
+tags = ["v0.12", "tpq", "matrix_free", "density", "sweep", "adaptive_m"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 6
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 3
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[observables]
+
+[tpq]
+kind = "density"
+source = "matrix_free"
+n_samples = 100
+seed = 7
+krylov_m = 80
+krylov_tol = 1e-06
+
+[output]
+directory = "runs/sweep_adaptive_m_tol_1e-6"
+format = "json"
+overwrite = true
