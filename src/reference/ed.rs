@@ -341,4 +341,45 @@ mod tests {
             assert!((ni - 1.0).abs() < 1e-10, "site {i}: {ni}");
         }
     }
+
+    #[test]
+    fn l6_half_filling_hilbert_dim_is_400() {
+        // L = 6, N_up = N_dn = 3: C(6, 3)^2 = 20^2 = 400 states.
+        let ed = canonical_thermal(6, 3, 3, 1.0, 4.0, &[0.0; 6]);
+        assert_eq!(ed.eigenvalues.len(), 400);
+        assert_eq!(ed.joint.len(), 400);
+    }
+
+    #[test]
+    fn l6_uniform_v_density_is_one_everywhere() {
+        // Half-filling V = 0: translation + particle-hole symmetry forces n_i = 1.
+        let ed = canonical_thermal(6, 3, 3, 1.0, 4.0, &[0.0; 6]);
+        let n = thermal_density(&ed, 2.0);
+        for (i, &ni) in n.iter().enumerate() {
+            assert!((ni - 1.0).abs() < 1e-10, "L=6 site {i}: {ni}");
+        }
+    }
+
+    #[test]
+    fn l6_u_zero_free_energy_matches_free_chain_pratt() {
+        // At U = 0 the canonical free energy from the many-body ED must
+        // agree with the single-particle Pratt recursion on the OBC chain
+        // spectrum (cross-method consistency at the U = 0 limit).
+        let l = 6_usize;
+        let n_per_spin = 3_usize;
+        let t = 1.0_f64;
+        let beta = 2.0_f64;
+        let v_ext = vec![0.0_f64; l];
+
+        let ed_result = canonical_thermal(l, n_per_spin, n_per_spin, t, 0.0, &v_ext);
+        let f_ed = free_energy(&ed_result.eigenvalues, beta);
+
+        let spec = super::super::free_chain::single_particle_spectrum_obc(l, t);
+        let f_pratt = super::super::free_chain::free_energy(&spec, n_per_spin, beta);
+
+        assert!(
+            (f_ed - f_pratt).abs() < 1e-9,
+            "ED F = {f_ed}, Pratt F = {f_pratt}"
+        );
+    }
 }
