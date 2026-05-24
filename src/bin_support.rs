@@ -162,15 +162,15 @@ pub fn compute_observables(
         }
         let mean_w_sq_c = mean_work.mul_add(mean_work, -quad / beta);
 
-        let theta_2 = match cfg.observables.theta_2.method.as_str() {
-            "zero" => 0.0,
-            "lda" => crate::observables::theta_2_lda::lda_theta_2(
+        let theta_2 = match cfg.observables.theta_2.method {
+            crate::config::TpqMethod::Zero => 0.0,
+            crate::config::TpqMethod::Lda => crate::observables::theta_2_lda::lda_theta_2(
                 cfg.hamiltonian.on_site_interaction / cfg.hamiltonian.hopping_j,
                 &delta,
                 &ks_state.densities,
                 &cfg.xc_functional,
             )?,
-            "exact" => {
+            crate::config::TpqMethod::Exact => {
                 // exact path requires the spin-symmetric sector (KS DFT here
                 // is restricted to N_up = N_dn from num_electrons_per_spin);
                 // a non-spinful or mismatched-sector config would compute the
@@ -210,14 +210,6 @@ pub fn compute_observables(
                     &final_potential,
                 );
                 crate::reference::ed::exact_theta_2(&ed_init, &ed_final, beta)
-            }
-            other => {
-                return Err(ScrapboxError::ConfigValidation {
-                    message: format!(
-                        "[observables].theta_2.method = {other:?} is not a recognized value \
-                         (supported: \"zero\", \"lda\", \"exact\")"
-                    ),
-                });
             }
         };
 
