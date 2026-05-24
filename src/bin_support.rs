@@ -77,6 +77,8 @@ pub fn susceptibility_finite_difference(
 }
 
 /// Compute every observable the config requested.
+// allow: dispatcher composes mean_work / s_irr / sigma_W^2 / theta_2 in a
+// single linear flow; splitting hurts readability more than function length.
 #[allow(clippy::too_many_lines)]
 pub fn compute_observables(
     cfg: &Config,
@@ -169,8 +171,28 @@ pub fn compute_observables(
                 &cfg.xc_functional,
             )?,
             "exact" => {
+                // exact path requires the spin-symmetric sector (KS DFT here
+                // is restricted to N_up = N_dn from num_electrons_per_spin);
+                // a non-spinful or mismatched-sector config would compute the
+                // Theta_2 trace over a sector that does not match the KS
+                // free-energy / mean_work computed above, mixing two distinct
+                // thermal ensembles in the FDR residual.
+                if !cfg.hamiltonian.spinful {
+                    return Err(ScrapboxError::ConfigValidation {
+                        message: "[observables].theta_2.method = \"exact\" requires                                   hamiltonian.spinful = true (current sector logic assumes                                   N_up = N_dn = num_electrons_per_spin)"
+                            .into(),
+                    });
+                }
                 let n_up = cfg.hamiltonian.num_electrons_per_spin;
                 let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+                if n_up > cfg.hamiltonian.num_sites || n_dn > cfg.hamiltonian.num_sites {
+                    return Err(ScrapboxError::ConfigValidation {
+                        message: format!(
+                            "[observables].theta_2.method = \"exact\":                              num_electrons_per_spin ({n_up}) exceeds num_sites ({})",
+                            cfg.hamiltonian.num_sites
+                        ),
+                    });
+                }
                 let ed_init = crate::reference::ed::canonical_thermal(
                     cfg.hamiltonian.num_sites,
                     n_up,

@@ -145,3 +145,144 @@ fn exact_theta_2_unknown_method_errors() {
     assert!(!status.success(), "unknown method should error");
     std::fs::remove_file(&cfg).ok();
 }
+
+#[allow(clippy::too_many_arguments)]
+fn write_config_full(
+    path: &std::path::Path,
+    tag: &str,
+    method: &str,
+    num_sites: usize,
+    num_electrons_per_spin: usize,
+    xc_kind: &str,
+    on_site_u: f64,
+    v_final: &[f64],
+) {
+    let v_final_str = v_final
+        .iter()
+        .map(f64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let zero_v = vec![0.0_f64; num_sites]
+        .iter()
+        .map(f64::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let xc_block = match xc_kind {
+        "balda" => "[xc_functional]\nkind = \"balda\"\n\n[xc_functional.params]\nmott_gap_smoothing_width = 0.15\n",
+        _ => &format!("[xc_functional]\nkind = \"{xc_kind}\"\n"),
+    };
+    let body = format!(
+        r#"
+schema_version = "0.2"
+
+[meta]
+name = "exact_theta_e2e_{tag}"
+description = "v0.9 #41 review-fix e2e"
+created = "2026-05-24"
+tags = ["v0.9", "theta_2", "exact", "review-fix"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = {num_sites}
+hopping_j = 1.0
+on_site_interaction = {on_site_u}
+spinful = true
+num_electrons_per_spin = {num_electrons_per_spin}
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [{zero_v}]
+
+{xc_block}
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 400
+tolerance = 1e-10
+mixing.kind = "pulay"
+mixing.alpha = 0.1
+mixing.history_depth = 8
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "explicit"
+final_external_potential.values = [{v_final_str}]
+
+[observables]
+mean_work = true
+irreversible_entropy = true
+work_variance = true
+theta_2.method = "{method}"
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/exact_theta_e2e_{tag}"
+format = "json"
+overwrite = true
+"#
+    );
+    std::fs::write(path, body).expect("write config");
+}
+
+#[test]
+fn exact_theta_2_works_with_non_interacting_xc() {
+    // Documents the xc-agnostic claim from the PR body: "exact" path
+    // is independent of XC choice (only EdResults of H_init/H_final
+    // matter). Run an L=2 quench with kind = "non_interacting" and U=0
+    // and assert the run succeeds.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_exact_noninter.toml");
+    write_config_full(
+        &cfg,
+        "noninter",
+        "exact",
+        2,
+        1,
+        "non_interacting",
+        0.0,
+        &[0.3, -0.3],
+    );
+    let status = invoke_run(&cfg);
+    assert!(
+        status.success(),
+        "exact path must succeed under non_interacting xc"
+    );
+    let (theta_2, _, _, _) = read_obs("noninter");
+    // U=0 free fermions: H_init and H_final do NOT generally share an
+    // eigenbasis (delta V breaks the kinetic-eigenstate symmetry), so
+    // Theta_2 > 0 in general. Just check finite + non-negative.
+    assert!(theta_2.is_finite(), "Theta_2 not finite: {theta_2}");
+    assert!(theta_2 >= 0.0, "Theta_2 negative: {theta_2}");
+    std::fs::remove_file(&cfg).ok();
+}
+
+#[test]
+fn exact_theta_2_l4_e2e_runs_and_returns_finite_positive() {
+    // E2E at L=4 (dim = 36) exercises the n_up > 1 sector through the
+    // CLI path. Asserts that the exact dispatcher handles non-trivial
+    // Hilbert size without panic and returns a finite, non-negative
+    // Theta_2.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_exact_l4.toml");
+    write_config_full(
+        &cfg,
+        "l4",
+        "exact",
+        4,
+        2,
+        "non_interacting",
+        2.0,
+        &[0.2, -0.2, 0.2, -0.2],
+    );
+    let status = invoke_run(&cfg);
+    assert!(status.success(), "L=4 exact must succeed");
+    let (theta_2, _, _, _) = read_obs("l4");
+    assert!(theta_2.is_finite() && theta_2 >= 0.0, "Theta_2 = {theta_2}");
+    std::fs::remove_file(&cfg).ok();
+}
