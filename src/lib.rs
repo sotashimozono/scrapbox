@@ -37,6 +37,7 @@ pub mod hamiltonian;
 pub mod observables;
 pub mod output;
 pub mod quench;
+pub mod reference;
 pub mod scf;
 pub mod spectrum;
 pub mod sweep;
