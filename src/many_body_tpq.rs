@@ -373,15 +373,22 @@ fn run_theta_2_mf(
         .max(k_states)
         .min(dim);
     let start = Instant::now();
-    let theta_2 = ed::exact_theta_2_matrix_free(&jw_init, &jw_final, beta, k_states, krylov_m);
+    let (theta_2, effective_m) =
+        ed::exact_theta_2_matrix_free(&jw_init, &jw_final, beta, k_states, krylov_m);
     let elapsed = start.elapsed().as_millis();
+    let krylov_stats = KrylovStatsJson {
+        min_m: effective_m,
+        max_m: effective_m,
+        #[allow(clippy::cast_precision_loss)]
+        mean_m: effective_m as f64,
+    };
     Ok(TpqRunOutput::Theta2 {
         source: "matrix_free",
         dim,
         beta,
         theta_2,
         wall_time_ms: elapsed,
-        krylov_stats: None,
+        krylov_stats: Some(krylov_stats),
     })
 }
 

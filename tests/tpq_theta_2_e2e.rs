@@ -455,3 +455,33 @@ fn tpq_adaptive_krylov_emits_krylov_stats_in_json() {
     std::fs::remove_file(&cfg_adaptive).ok();
     std::fs::remove_file(&cfg_fixed).ok();
 }
+
+#[test]
+fn tpq_theta_2_matrix_free_emits_krylov_stats_in_json() {
+    // v0.12 alpha: matrix-free theta_2 must report the actual Lanczos
+    // subspace dim it used (effective_m) under `krylov_stats`. The
+    // theta_2 path runs a single Lanczos diagonalization, so
+    // min_m == max_m == mean_m == effective_m.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_tpq_theta_2_mf_stats.toml");
+    write_tpq_theta_2_mf_config(&cfg, "stats", 8);
+    assert!(invoke("tpq", &cfg).success());
+    let path = std::path::Path::new(manifest).join("runs/tpq_theta_2_mf_e2e_stats/tpq_report.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let stats = json
+        .get("krylov_stats")
+        .expect("matrix_free theta_2 must emit krylov_stats");
+    let min_m = stats["min_m"].as_u64().expect("min_m");
+    let max_m = stats["max_m"].as_u64().expect("max_m");
+    let mean_m = stats["mean_m"].as_f64().expect("mean_m");
+    assert!(min_m >= 1, "min_m must be >= 1, got {min_m}");
+    assert_eq!(min_m, max_m, "single Lanczos run: min_m must equal max_m");
+    #[allow(clippy::cast_precision_loss)]
+    let min_m_f = min_m as f64;
+    assert!(
+        (mean_m - min_m_f).abs() < 1e-12,
+        "mean_m must equal min_m for single Lanczos run: mean_m={mean_m}, min_m={min_m}"
+    );
+    std::fs::remove_file(&cfg).ok();
+}

@@ -31,11 +31,26 @@ pub struct LanczosParams {
 
 /// Run Lanczos on a real-symmetric `n × n` matrix and return the Ritz
 /// pairs sorted ascending by eigenvalue.
-#[allow(clippy::too_many_lines)]
 pub fn diagonalize<O: super::linear_operator::LinearOperator>(
     matrix: &O,
     params: &LanczosParams,
 ) -> Result<Eigendecomposition> {
+    diagonalize_with_effective_m(matrix, params).map(|(eigen, _)| eigen)
+}
+
+/// Same as [`diagonalize`] but also returns the actual Krylov subspace
+/// dimension used (`effective_m`).
+///
+/// For non-pathological matrices this equals `params.krylov_dim` (or
+/// `n` when `None`); when an invariant subspace is hit at `k < m`,
+/// `effective_m = k + 1` and the spectrum truncates accordingly. Used
+/// to surface Lanczos diagnostics into `tpq_report.json` for
+/// `scrapbox tpq theta_2` runs.
+#[allow(clippy::too_many_lines)]
+pub fn diagonalize_with_effective_m<O: super::linear_operator::LinearOperator>(
+    matrix: &O,
+    params: &LanczosParams,
+) -> Result<(Eigendecomposition, usize)> {
     let n = matrix.dim();
     let m = params.krylov_dim.unwrap_or(n).min(n);
     if m == 0 {
@@ -146,10 +161,13 @@ pub fn diagonalize<O: super::linear_operator::LinearOperator>(
         }
     }
 
-    Ok(Eigendecomposition {
-        eigenvalues,
-        eigenvectors,
-    })
+    Ok((
+        Eigendecomposition {
+            eigenvalues,
+            eigenvectors,
+        },
+        effective_m,
+    ))
 }
 
 fn vec_norm(v: &[f64]) -> f64 {

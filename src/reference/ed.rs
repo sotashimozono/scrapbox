@@ -396,7 +396,7 @@ pub fn exact_theta_2_matrix_free<O1, O2>(
     beta: f64,
     k_states: usize,
     krylov_m: usize,
-) -> f64
+) -> (f64, usize)
 where
     O1: crate::spectrum::linear_operator::LinearOperator,
     O2: crate::spectrum::linear_operator::LinearOperator,
@@ -421,8 +421,9 @@ where
         max_iter: krylov_m * 4,
         tol: 1e-12,
     };
-    let eigen = crate::spectrum::lanczos::diagonalize(h_init, &lanczos_params)
-        .expect("exact_theta_2_matrix_free: Lanczos diagonalisation failed");
+    let (eigen, effective_m) =
+        crate::spectrum::lanczos::diagonalize_with_effective_m(h_init, &lanczos_params)
+            .expect("exact_theta_2_matrix_free: Lanczos diagonalisation failed");
     // Eigendecomposition is sorted ascending; first k_states columns are
     // the lowest-energy eigenpairs of H_init.
     let evals = &eigen.eigenvalues;
@@ -468,7 +469,7 @@ where
     let mean_w_nn_sq = sum_w_nn_sq / z;
     let sigma_w_sq = mean_w_sq - mean_w * mean_w;
     let sigma_w_sq_diag = mean_w_nn_sq - mean_w * mean_w;
-    sigma_w_sq - sigma_w_sq_diag
+    (sigma_w_sq - sigma_w_sq_diag, effective_m)
 }
 
 #[cfg(test)]
@@ -731,7 +732,7 @@ mod tests {
         let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
         // K = dim should recover the exact value (up to Lanczos truncation
         // on a Krylov subspace large enough to span the full Hilbert space).
-        let theta_mf = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 36, 50);
+        let (theta_mf, _) = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 36, 50);
         assert!(
             (theta_mf - theta_ed).abs() < 1e-7,
             "matrix-free K=dim Theta_2 = {theta_mf} should match ED-path = {theta_ed}"
@@ -752,8 +753,8 @@ mod tests {
 
         let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_init);
         let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
-        let theta_k8 = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 8, 24);
-        let theta_k16 = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 16, 36);
+        let (theta_k8, _) = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 8, 24);
+        let (theta_k16, _) = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 16, 36);
 
         let err_k8 = (theta_k8 - theta_ed).abs() / theta_ed.abs();
         let err_k16 = (theta_k16 - theta_ed).abs() / theta_ed.abs();
@@ -776,7 +777,7 @@ mod tests {
         let v_final = [0.2_f64, -0.2, 0.2, -0.2, 0.2, -0.2];
         let jw_init = JwHubbard::new(6, 3, 3, 1.0, 4.0, &v_init);
         let jw_final = JwHubbard::new(6, 3, 3, 1.0, 4.0, &v_final);
-        let theta = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 16, 40);
+        let (theta, _) = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 16, 40);
         assert!(
             theta.is_finite() && theta >= 0.0,
             "L=6 matrix-free Theta_2 = {theta}"
