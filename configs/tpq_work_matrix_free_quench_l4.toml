@@ -1,0 +1,53 @@
+schema_version = "0.2"
+
+[meta]
+name = "tpq_work_matrix_free_quench_l4"
+description = "L=4 sudden-quench canonical work statistics via matrix-free TPQ. v0.8 alpha tpq_work_statistics_matrix_free through scrapbox tpq."
+created = "2026-05-24"
+tags = ["v0.11", "tpq", "matrix_free", "work_statistics", "quench", "demo"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 4
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 2
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.0, 0.0, 0.0, 0.0]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "explicit"
+final_external_potential.values = [0.3, -0.3, 0.3, -0.3]
+
+[observables]
+
+[tpq]
+kind = "work_statistics"
+source = "matrix_free"
+n_samples = 500
+seed = 11
+krylov_m = 30
+
+[output]
+directory = "runs/tpq_work_matrix_free_quench_l4"
+format = "json"
+overwrite = true

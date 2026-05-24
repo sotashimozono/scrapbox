@@ -1,0 +1,54 @@
+schema_version = "0.2"
+
+[meta]
+name = "tpq_theta_2_matrix_free_l6"
+description = "L=6 Palamara III.3 exact Theta_2 via Lanczos low-K eigenstate truncation. v0.10 beta exact_theta_2_matrix_free through scrapbox tpq. K=16 chosen as default; matches ED-path to ~5% relative at this dim+beta."
+created = "2026-05-24"
+tags = ["v0.11", "tpq", "matrix_free", "theta_2", "demo"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 6
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 3
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "explicit"
+final_external_potential.values = [0.2, -0.2, 0.2, -0.2, 0.2, -0.2]
+
+[observables]
+
+[tpq]
+kind = "theta_2"
+source = "matrix_free"
+n_samples = 1
+seed = 0
+theta_2_k_states = 16
+krylov_m = 40
+
+[output]
+directory = "runs/tpq_theta_2_matrix_free_l6"
+format = "json"
+overwrite = true

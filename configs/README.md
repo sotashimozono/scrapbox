@@ -76,3 +76,32 @@ Tests in `tests/` use the `reference::` module as ground truth:
 2. Update `[meta]` (name, description, created, tags).
 3. Pick `[scf].mixing` carefully - Pulay (`alpha=0.2-0.3`, `history_depth=6-8`) works on smooth potentials; large-U or Mott-regime needs linear (`alpha=0.05`, `max_iterations=2000+`).
 4. Run `scrapbox doctor configs/your.toml` first - catches schema mismatches before any SCF cost.
+
+## Matrix-free TPQ + theta_2 demos (v0.11)
+
+Three demo configs showing the v0.7-v0.10 matrix-free TPQ machinery exposed through `scrapbox tpq`. Each writes `tpq_report.json` in its own `runs/` directory.
+
+### `tpq_density_matrix_free_l6.toml`
+
+`L = 6`, dim = 400, half-filling. Drives `tpq_density_matrix_free` via Krylov `exp(-beta H/2)` on `JwHubbard`. Adaptive Krylov (`krylov_tol = 1e-10`, `krylov_m = 60` as upper bound) — `tpq_report.json` includes `krylov_stats` showing the per-sample `m` spread.
+
+```
+scrapbox tpq configs/tpq_density_matrix_free_l6.toml
+cat runs/tpq_density_matrix_free_l6/tpq_report.json
+```
+
+### `tpq_work_matrix_free_quench_l4.toml`
+
+`L = 4`, sudden quench `v_init = 0 -> v_final = (+0.3, -0.3, +0.3, -0.3)`. Drives `tpq_work_statistics_matrix_free` (v0.8 alpha). Fixed `krylov_m = 30`, `n_samples = 500` — gives `<W>` and `sigma_W^2` plus `mean_w_stderr` for FDR diagnostics.
+
+```
+scrapbox tpq configs/tpq_work_matrix_free_quench_l4.toml
+```
+
+### `tpq_theta_2_matrix_free_l6.toml`
+
+`L = 6`, Palamara III.3 exact `Theta_2` via Lanczos low-K truncation (v0.10 beta). `theta_2_k_states = 16` keeps only the 16 lowest eigenpairs of `H_init`, sufficient at `beta = 2.0` where the thermal weight concentrates on low-energy states.
+
+```
+scrapbox tpq configs/tpq_theta_2_matrix_free_l6.toml
+```
