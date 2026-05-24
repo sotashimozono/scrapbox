@@ -36,6 +36,7 @@ pub mod density;
 pub mod doctor;
 pub mod error;
 pub mod hamiltonian;
+pub mod many_body_ed;
 pub mod observables;
 pub mod output;
 pub mod quench;

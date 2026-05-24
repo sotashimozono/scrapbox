@@ -50,6 +50,9 @@ pub struct Config {
     /// Wall-clock benchmark spec — optional, drives `scrapbox bench`.
     #[serde(default)]
     pub bench: Option<Bench>,
+    /// Many-body ED solver spec — optional, drives `scrapbox ed`.
+    #[serde(default)]
+    pub ed: Option<EdSpec>,
 }
 
 impl Config {
@@ -679,6 +682,32 @@ const fn default_bench_warmup() -> usize {
 
 const fn default_bench_measured() -> usize {
     5
+}
+
+// --- EdSpec (v0.7 alpha) ---------------------------------------------------
+
+/// Backend choice for the `scrapbox ed` subcommand.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdSolver {
+    /// Build the dim x dim H, full `LAPACK`-style eigen via faer.
+    Dense,
+    /// On-the-fly `JwHubbard` via Lanczos. Returns low-`k` spectrum.
+    MatrixFreeLanczos,
+    /// CSR Hubbard via Lanczos. Reserved for v0.7 batch beta.
+    SparseLanczos,
+}
+
+/// `[ed]` section: solver choice and optional eigenvalue count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EdSpec {
+    /// Which backend to dispatch.
+    pub solver: EdSolver,
+    /// Number of (lowest) eigenvalues to return. Dense defaults to the
+    /// full spectrum; iterative backends default to 8.
+    #[serde(default)]
+    pub num_eigenvalues: Option<usize>,
 }
 
 #[cfg(test)]

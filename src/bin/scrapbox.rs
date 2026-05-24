@@ -27,6 +27,7 @@ SUBCOMMANDS:
     sweep       Cartesian-product parameter grid (v0.2)
     bench       `run` + wall-clock timing (later)
     doctor      Parse + dispatch only (later)
+    ed          Many-body Hubbard ED dispatcher (dense / matrix-free Lanczos)
 
 See notes/discipline/HARNESS.md for the full design.
 ";
@@ -54,6 +55,7 @@ fn main() -> ExitCode {
         "sweep" => dispatch(sweep_subcommand(config_path)),
         "bench" => dispatch(bench_subcommand(config_path)),
         "doctor" => dispatch(doctor_subcommand(config_path)),
+        "ed" => dispatch(ed_subcommand(config_path)),
         _ => {
             eprintln!("scrapbox: unknown subcommand '{subcommand}'\n\n{USAGE}");
             ExitCode::from(2)
@@ -138,4 +140,19 @@ fn bench_subcommand(config_path: &str) -> Result<()> {
 
 fn doctor_subcommand(config_path: &str) -> Result<()> {
     scrapbox::doctor::run(std::path::Path::new(config_path))
+}
+
+fn ed_subcommand(config_path: &str) -> Result<()> {
+    let cfg = Config::from_file(config_path)?;
+    let out = scrapbox::many_body_ed::run(&cfg)?;
+    let resolved = scrapbox::bin_support::resolve_output_dir(&cfg);
+    eprintln!(
+        "scrapbox ed: solver = {solver}, dim = {dim}, returned = {k} (wall {ms} ms) -> {dir}",
+        solver = out.solver,
+        dim = out.dim,
+        k = out.num_eigenvalues_returned,
+        ms = out.wall_time_ms,
+        dir = resolved.display()
+    );
+    Ok(())
 }
