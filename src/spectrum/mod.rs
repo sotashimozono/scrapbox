@@ -1,6 +1,7 @@
 //! Layer 3 — eigendecomposition of the single-particle KS matrix.
 
 pub mod dense_diag;
+pub mod hubbard_jw;
 pub mod lanczos;
 pub mod linear_operator;
 
