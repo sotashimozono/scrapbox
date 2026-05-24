@@ -521,18 +521,41 @@ pub struct Observables {
     pub partition_function: bool,
 }
 
-/// How to estimate `Θ_2` per Palamara 2024 §IV.1.
+/// Which estimator to use for `Theta_2` per Palamara 2024 §IV.1.
+/// Typed enum (replacing the v0.10 string field) so serde catches
+/// typos like `"exatc"` at deserialize time instead of dispatcher-time.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TpqMethod {
+    /// Neglect `Theta_2` (set to 0). Baseline; closes FDR only when
+    /// the quench is trivially commuting.
+    #[default]
+    Zero,
+    /// v0.5 alpha BALDA-only LDA placeholder; requires
+    /// `xc_functional.kind = "balda"`.
+    Lda,
+    /// v0.9 alpha Palamara III.3 exact formula; xc-agnostic.
+    Exact,
+}
+
+impl std::fmt::Display for TpqMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            Self::Zero => "zero",
+            Self::Lda => "lda",
+            Self::Exact => "exact",
+        };
+        f.write_str(s)
+    }
+}
+
+/// How to estimate `Theta_2` per Palamara 2024 §IV.1.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Theta2Spec {
-    /// `zero` (default — neglect) or `lda` (requires a homogeneous-
-    /// system reference; lands fully in v0.3 once BALDA is wired).
-    #[serde(default = "default_theta_2_method")]
-    pub method: String,
-}
-
-fn default_theta_2_method() -> String {
-    "zero".to_string()
+    /// See [`TpqMethod`]. Typo detection happens at config-parse time.
+    #[serde(default)]
+    pub method: TpqMethod,
 }
 
 // ─── Output ────────────────────────────────────────────────────────────
@@ -776,6 +799,115 @@ pub struct TpqSpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn theta_2_method_unknown_string_rejected_at_parse() {
+        // v0.11 beta: TpqMethod typed enum should catch typos at
+        // serde deserialize time, not at dispatch time.
+        let toml_src = r#"
+schema_version = "0.2"
+
+[meta]
+name = "x"
+description = ""
+created = ""
+tags = []
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 2
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 1
+beta = 2.0
+external_potential.kind = "uniform"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[observables]
+theta_2.method = "exatc"
+
+[output]
+directory = "runs/x"
+format = "json"
+overwrite = true
+"#;
+        let err = Config::from_toml_str(toml_src).expect_err("must fail on typo");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("exatc") || msg.contains("variant"),
+            "expected typo to be flagged with offending value, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn theta_2_method_accepts_zero_lda_exact() {
+        for method in &["zero", "lda", "exact"] {
+            let toml_src = format!(
+                r#"
+schema_version = "0.2"
+
+[meta]
+name = "x"
+description = ""
+created = ""
+tags = []
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 2
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 1
+beta = 2.0
+external_potential.kind = "uniform"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[observables]
+theta_2.method = "{method}"
+
+[output]
+directory = "runs/x"
+format = "json"
+overwrite = true
+"#
+            );
+            Config::from_toml_str(&toml_src).unwrap_or_else(|e| panic!("method={method}: {e}"));
+        }
+    }
 
     const FULL_DIMER_TOML: &str = r#"
 schema_version = "0.2"
