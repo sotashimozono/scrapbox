@@ -44,6 +44,13 @@ pub enum TpqRunOutput {
         mean_w_stderr: f64,
         wall_time_ms: u128,
     },
+    Theta2 {
+        source: &'static str,
+        dim: usize,
+        beta: f64,
+        theta_2: f64,
+        wall_time_ms: u128,
+    },
 }
 
 pub fn run(cfg: &Config) -> Result<TpqRunOutput> {
@@ -71,6 +78,12 @@ pub fn run(cfg: &Config) -> Result<TpqRunOutput> {
         }
         (TpqKind::WorkStatistics, TpqSource::MatrixFree) => {
             run_work_mf(cfg, &v_ext, n_up, n_dn, beta, tpq_cfg)?
+        }
+        (TpqKind::Theta2, TpqSource::Ed) => run_theta_2_ed(cfg, &v_ext, n_up, n_dn, beta)?,
+        (TpqKind::Theta2, TpqSource::MatrixFree) => {
+            return Err(ScrapboxError::ConfigValidation {
+                message: "[tpq] kind = \"theta_2\" source = \"matrix_free\" is reserved for v0.10 batch beta and not implemented yet".into(),
+            });
         }
     };
 
@@ -246,6 +259,43 @@ fn run_work_mf(
         mean_w: stats.mean_w,
         work_variance: stats.work_variance,
         mean_w_stderr: stats.mean_w_stderr,
+        wall_time_ms: elapsed,
+    })
+}
+
+fn run_theta_2_ed(
+    cfg: &Config,
+    v_init: &[f64],
+    n_up: usize,
+    n_dn: usize,
+    beta: f64,
+) -> Result<TpqRunOutput> {
+    let v_final = resolve_v_final(cfg)?;
+    let ed_init = ed::canonical_thermal(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        v_init,
+    );
+    let ed_final = ed::canonical_thermal(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_final,
+    );
+    let dim = ed_init.eigenvalues.len();
+    let start = Instant::now();
+    let theta_2 = ed::exact_theta_2(&ed_init, &ed_final, beta);
+    let elapsed = start.elapsed().as_millis();
+    Ok(TpqRunOutput::Theta2 {
+        source: "ed",
+        dim,
+        beta,
+        theta_2,
         wall_time_ms: elapsed,
     })
 }
