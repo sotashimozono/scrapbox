@@ -482,6 +482,67 @@ fn sample_complex_psi_beta(
     (psi_re, psi_im)
 }
 
+/// TPQ canonical-thermal density estimate driven by a matrix-free
+/// `JwHubbard` operator instead of an exact-diagonalisation
+/// `EdResult`. The Boltzmann factor is applied via Krylov
+/// exponentiation: `|psi_beta> = exp(-beta H / 2) |psi_0>` from a
+/// random real Gaussian `|psi_0>`, evaluated through
+/// [`crate::spectrum::krylov::expm_apply`].
+///
+/// Use this when full ED is infeasible. For small Hilbert dimensions
+/// where `EdResult` is available, [`tpq_density`] is faster (no
+/// per-sample Krylov build).
+///
+/// `krylov_m` is the Lanczos subspace dimension per sample; 30 is a
+/// reasonable default for moderate `beta` (~ 2).
+#[must_use]
+pub fn tpq_density_matrix_free(
+    jw: &crate::spectrum::hubbard_jw::JwHubbard,
+    beta: f64,
+    n_samples: usize,
+    seed: u64,
+    krylov_m: usize,
+) -> Vec<f64> {
+    use crate::spectrum::linear_operator::LinearOperator;
+    assert!(n_samples > 0, "n_samples must be >= 1");
+    let dim = jw.dim();
+    assert!(dim > 0, "JwHubbard dim must be > 0");
+    let num_sites = jw.num_sites();
+    let joint = jw.joint_masks();
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut acc_density = vec![0.0_f64; num_sites];
+    let mut acc_norm_sq = 0.0_f64;
+
+    for _ in 0..n_samples {
+        let psi_0: Vec<f64> = (0..dim).map(|_| box_muller(&mut rng)).collect();
+        let psi_beta = crate::spectrum::krylov::expm_apply(jw, -beta * 0.5, &psi_0, krylov_m);
+
+        let mut sample_norm_sq = 0.0_f64;
+        for &p in &psi_beta {
+            sample_norm_sq += p * p;
+        }
+        for site in 0..num_sites {
+            let mut occ_acc = 0.0_f64;
+            for (j, &(up_mask, dn_mask)) in joint.iter().enumerate() {
+                let occ = f64::from(((up_mask >> site) & 1) + ((dn_mask >> site) & 1));
+                occ_acc += psi_beta[j] * psi_beta[j] * occ;
+            }
+            acc_density[site] += occ_acc;
+        }
+        acc_norm_sq += sample_norm_sq;
+    }
+
+    assert!(
+        acc_norm_sq > 0.0,
+        "tpq_density_matrix_free: accumulated norm is zero"
+    );
+    for x in &mut acc_density {
+        *x /= acc_norm_sq;
+    }
+    acc_density
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::ed;
@@ -733,6 +794,50 @@ mod tests {
         let b = tpq_density_complex(&result, 2.0, 20, 99);
         for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
             assert!((x - y).abs() < 1e-14, "site {i}: not reproducible");
+        }
+    }
+
+    #[test]
+    fn tpq_density_matrix_free_matches_ed_path_at_l4() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v = [0.1_f64, -0.1, 0.1, -0.1];
+        let ed_result = ed::canonical_thermal(4, 2, 2, 1.0, 4.0, &v);
+        let n_ed = ed::thermal_density(&ed_result, 2.0);
+
+        let jw = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v);
+        let n_mf = tpq_density_matrix_free(&jw, 2.0, 500, 7, 30);
+
+        for i in 0..4 {
+            assert!(
+                (n_mf[i] - n_ed[i]).abs() < 0.05,
+                "site {i}: matrix-free TPQ = {}, ED = {}",
+                n_mf[i],
+                n_ed[i]
+            );
+        }
+    }
+
+    #[test]
+    fn tpq_density_matrix_free_dimer_half_filling_density_is_one() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let jw = JwHubbard::new(2, 1, 1, 1.0, 4.0, &[0.0, 0.0]);
+        let d = tpq_density_matrix_free(&jw, 2.0, 60, 42, 8);
+        for (i, &n) in d.iter().enumerate() {
+            assert!(
+                (n - 1.0).abs() < 0.15,
+                "site {i}: matrix-free TPQ = {n}, expected ~ 1"
+            );
+        }
+    }
+
+    #[test]
+    fn tpq_density_matrix_free_deterministic_with_same_seed() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let jw = JwHubbard::new(2, 1, 1, 1.0, 4.0, &[0.0, 0.0]);
+        let a = tpq_density_matrix_free(&jw, 2.0, 20, 99, 8);
+        let b = tpq_density_matrix_free(&jw, 2.0, 20, 99, 8);
+        for (i, (&x, &y)) in a.iter().zip(b.iter()).enumerate() {
+            assert!((x - y).abs() < 1e-12, "site {i}: not reproducible");
         }
     }
 }
