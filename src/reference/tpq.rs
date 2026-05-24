@@ -29,6 +29,17 @@
 //! as `dim -> infinity` (concentration of measure). For finite `dim`,
 //! averaging over multiple `|psi_0>` reduces variance as
 //! `1 / sqrt(N_samples)`.
+//!
+//! ## Complex-Gaussian amplitudes (variance reduction)
+//!
+//! Sugiura and Shimizu (Phys. Rev. Lett. 111, 010401 (2013)) show that
+//! drawing `c_k = (re + i im) / sqrt(2)` with `re, im ~ N(0, 1)` makes
+//! `|c_k|^2` chi-squared with 2 degrees of freedom (variance 1) instead
+//! of 1 dof (variance 2). For real-symmetric (Hermitian) operators the
+//! resulting estimator variance is halved per sample. The `_complex`-
+//! suffixed entry points implement this; the imaginary cross-term in
+//! `<psi|W|psi>` vanishes identically per sample because
+//! `psi_re^T W psi_im = psi_im^T W psi_re` when `W = W^T`.
 
 use super::ed::EdResult;
 use rand::rngs::StdRng;
@@ -213,8 +224,8 @@ pub fn tpq_work_statistics(
         }
 
         // H_init psi_beta and H_final psi_beta via their eigen-decomps
-        let h_init_psi = apply_hamiltonian(&psi_beta, ed_init);
-        let h_final_psi = apply_hamiltonian(&psi_beta, ed_final);
+        let h_init_psi = super::ed::apply_hamiltonian(&psi_beta, ed_init);
+        let h_final_psi = super::ed::apply_hamiltonian(&psi_beta, ed_final);
 
         // delta_psi = (H_final - H_init) psi_beta
         let delta_psi: Vec<f64> = h_final_psi
@@ -245,6 +256,11 @@ pub fn tpq_work_statistics(
     let mean_w_sq = acc_num_w_sq / acc_denom;
     let work_variance = mean_w_sq - mean_w * mean_w;
 
+    // NOTE: mean_w_stderr is the stderr of the *per-sample ratio*
+    // num_w_i / denom_i, NOT the stderr of the pooled estimator
+    // acc_num_w / acc_denom. The two differ at finite n_samples; the
+    // per-sample stderr is a useful diagnostic for ratio-estimator
+    // convergence but does not strictly bound the error of mean_w.
     let n_f = n_samples as f64;
     let sample_mean: f64 = per_sample_mean_w.iter().sum::<f64>() / n_f;
     let sample_var: f64 = per_sample_mean_w
@@ -260,29 +276,6 @@ pub fn tpq_work_statistics(
         mean_w_stderr,
         n_samples,
     }
-}
-
-/// Apply `H` (encoded by its eigen-decomposition in `ed`) to `psi`
-/// in the original basis: `H psi = U diag(E) U^T psi`.
-fn apply_hamiltonian(psi: &[f64], ed: &EdResult) -> Vec<f64> {
-    let dim = ed.eigenvalues.len();
-    debug_assert_eq!(psi.len(), dim);
-    let mut d = vec![0.0_f64; dim];
-    for alpha in 0..dim {
-        let mut acc = 0.0_f64;
-        for (j, &p) in psi.iter().enumerate() {
-            acc += ed.eigenvectors[(j, alpha)] * p;
-        }
-        d[alpha] = acc;
-    }
-    let mut out = vec![0.0_f64; dim];
-    for alpha in 0..dim {
-        let w = ed.eigenvalues[alpha] * d[alpha];
-        for (j, o) in out.iter_mut().enumerate() {
-            *o += w * ed.eigenvectors[(j, alpha)];
-        }
-    }
-    out
 }
 
 /// Complex-amplitude TPQ canonical-thermal density estimate.
@@ -380,10 +373,10 @@ pub fn tpq_work_statistics_complex(
     for _ in 0..n_samples {
         let (psi_re, psi_im) = sample_complex_psi_beta(&mut rng, ed_init, beta, shift, scale, dim);
 
-        let h_init_psi_re = apply_hamiltonian(&psi_re, ed_init);
-        let h_init_psi_im = apply_hamiltonian(&psi_im, ed_init);
-        let h_final_psi_re = apply_hamiltonian(&psi_re, ed_final);
-        let h_final_psi_im = apply_hamiltonian(&psi_im, ed_final);
+        let h_init_psi_re = super::ed::apply_hamiltonian(&psi_re, ed_init);
+        let h_init_psi_im = super::ed::apply_hamiltonian(&psi_im, ed_init);
+        let h_final_psi_re = super::ed::apply_hamiltonian(&psi_re, ed_final);
+        let h_final_psi_im = super::ed::apply_hamiltonian(&psi_im, ed_final);
 
         let delta_re: Vec<f64> = h_final_psi_re
             .iter()
@@ -422,6 +415,11 @@ pub fn tpq_work_statistics_complex(
     let mean_w_sq = acc_num_w_sq / acc_denom;
     let work_variance = mean_w_sq - mean_w * mean_w;
 
+    // NOTE: mean_w_stderr is the stderr of the *per-sample ratio*
+    // num_w_i / denom_i, NOT the stderr of the pooled estimator
+    // acc_num_w / acc_denom. The two differ at finite n_samples; the
+    // per-sample stderr is a useful diagnostic for ratio-estimator
+    // convergence but does not strictly bound the error of mean_w.
     let n_f = n_samples as f64;
     let sample_mean: f64 = per_sample_mean_w.iter().sum::<f64>() / n_f;
     let sample_var: f64 = per_sample_mean_w
@@ -626,6 +624,11 @@ where
     let mean_w_sq = acc_num_w_sq / acc_denom;
     let work_variance = mean_w_sq - mean_w * mean_w;
 
+    // NOTE: mean_w_stderr is the stderr of the *per-sample ratio*
+    // num_w_i / denom_i, NOT the stderr of the pooled estimator
+    // acc_num_w / acc_denom. The two differ at finite n_samples; the
+    // per-sample stderr is a useful diagnostic for ratio-estimator
+    // convergence but does not strictly bound the error of mean_w.
     let n_f = n_samples as f64;
     let sample_mean: f64 = per_sample_mean_w.iter().sum::<f64>() / n_f;
     let sample_var: f64 = per_sample_mean_w
@@ -791,6 +794,11 @@ where
     let mean_w_sq = acc_num_w_sq / acc_denom;
     let work_variance = mean_w_sq - mean_w * mean_w;
 
+    // NOTE: mean_w_stderr is the stderr of the *per-sample ratio*
+    // num_w_i / denom_i, NOT the stderr of the pooled estimator
+    // acc_num_w / acc_denom. The two differ at finite n_samples; the
+    // per-sample stderr is a useful diagnostic for ratio-estimator
+    // convergence but does not strictly bound the error of mean_w.
     let n_f = n_samples as f64;
     let sample_mean: f64 = per_sample_mean_w.iter().sum::<f64>() / n_f;
     let sample_var: f64 = per_sample_mean_w
@@ -909,8 +917,8 @@ mod tests {
             for j in 0..dim {
                 psi_n[j] = ed_init.eigenvectors[(j, n)];
             }
-            let h_init_psi = apply_hamiltonian(&psi_n, &ed_init);
-            let h_final_psi = apply_hamiltonian(&psi_n, &ed_final);
+            let h_init_psi = ed::apply_hamiltonian(&psi_n, &ed_init);
+            let h_final_psi = ed::apply_hamiltonian(&psi_n, &ed_final);
             let delta_psi: Vec<f64> = h_final_psi
                 .iter()
                 .zip(h_init_psi.iter())
@@ -994,8 +1002,8 @@ mod tests {
             for j in 0..dim {
                 psi_n[j] = ed_init.eigenvectors[(j, n)];
             }
-            let h_init_psi = apply_hamiltonian(&psi_n, &ed_init);
-            let h_final_psi = apply_hamiltonian(&psi_n, &ed_final);
+            let h_init_psi = ed::apply_hamiltonian(&psi_n, &ed_init);
+            let h_final_psi = ed::apply_hamiltonian(&psi_n, &ed_final);
             let delta: Vec<f64> = h_final_psi
                 .iter()
                 .zip(h_init_psi.iter())
@@ -1220,7 +1228,7 @@ mod tests {
         let mf_cplx = tpq_work_statistics_matrix_free_complex(&jw_init, &jw_final, 2.0, n, 13, 30);
         let ratio = mf_cplx.mean_w_stderr / mf_real.mean_w_stderr;
         assert!(
-            ratio < 0.9,
+            ratio < 0.85,
             "complex stderr {} not noticeably below real stderr {} (ratio {})",
             mf_cplx.mean_w_stderr,
             mf_real.mean_w_stderr,

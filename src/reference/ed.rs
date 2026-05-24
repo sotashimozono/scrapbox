@@ -318,7 +318,7 @@ pub fn exact_theta_2(ed_init: &EdResult, ed_final: &EdResult, beta: f64) -> f64 
             psi_n[j] = ed_init.eigenvectors[(j, n)];
         }
 
-        let h_final_psi = apply_eigen_h(&psi_n, ed_final);
+        let h_final_psi = apply_hamiltonian(&psi_n, ed_final);
         let h_init_psi: Vec<f64> = psi_n.iter().map(|p| ed_init.eigenvalues[n] * p).collect();
         let delta_psi: Vec<f64> = h_final_psi
             .iter()
@@ -334,6 +334,10 @@ pub fn exact_theta_2(ed_init: &EdResult, ed_final: &EdResult, beta: f64) -> f64 
         sum_full_w_sq_n += weight * full_w_sq_n;
     }
 
+    assert!(
+        z.is_finite() && z > 0.0,
+        "exact_theta_2: partition function collapsed (Z = {z}, beta = {beta}); check eigenvalues / beta"
+    );
     let mean_w = sum_w_nn / z;
     let mean_w_sq = sum_full_w_sq_n / z;
     let mean_w_nn_sq = sum_w_nn_sq / z;
@@ -345,7 +349,9 @@ pub fn exact_theta_2(ed_init: &EdResult, ed_final: &EdResult, beta: f64) -> f64 
 
 /// Apply a real-symmetric `H` (encoded by its eigen-decomposition in
 /// `ed`) to `psi` in the original basis: `H psi = U diag(E) U^T psi`.
-fn apply_eigen_h(psi: &[f64], ed: &EdResult) -> Vec<f64> {
+/// Shared between `exact_theta_2` and `reference::tpq` matrix-element
+/// estimators; no dense `H` is materialised.
+pub(crate) fn apply_hamiltonian(psi: &[f64], ed: &EdResult) -> Vec<f64> {
     let dim = ed.eigenvalues.len();
     debug_assert_eq!(psi.len(), dim);
     let mut d = vec![0.0_f64; dim];
@@ -538,7 +544,7 @@ mod tests {
             for j in 0..dim {
                 psi_n[j] = ed_init.eigenvectors[(j, n)];
             }
-            let h_final_psi = apply_eigen_h(&psi_n, &ed_final);
+            let h_final_psi = apply_hamiltonian(&psi_n, &ed_final);
             let h_init_psi: Vec<f64> = psi_n.iter().map(|p| ed_init.eigenvalues[n] * p).collect();
             let delta: Vec<f64> = h_final_psi
                 .iter()
@@ -573,6 +579,43 @@ mod tests {
         assert!(
             theta.abs() < 1e-10,
             "U=0 trivial quench should give 0, got {theta}"
+        );
+    }
+
+    #[test]
+    fn exact_theta_2_remains_finite_and_nonneg_across_beta_range() {
+        // Theta_2 is a Hilbert-space invariant of W = H_final - H_init,
+        // weighted thermally. It is non-negative for any beta but is not
+        // monotone in beta (concentration on |0_init> at low T can leave
+        // non-zero off-diagonal coupling via W). We just assert finite,
+        // non-negative outputs across hot/warm/cold regimes.
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let ed_init = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        for &beta in &[0.05_f64, 2.0, 20.0] {
+            let theta = exact_theta_2(&ed_init, &ed_final, beta);
+            assert!(
+                theta.is_finite(),
+                "beta={beta}: Theta_2 not finite, got {theta}"
+            );
+            assert!(theta >= 0.0, "beta={beta}: Theta_2 negative, got {theta}");
+        }
+    }
+
+    #[test]
+    fn exact_theta_2_l6_finite_and_positive_smoke() {
+        // Smoke test at L=6 (dim = 400): exact_theta_2 must complete,
+        // return a finite positive value for a non-commuting quench.
+        let v_init = [0.0_f64; 6];
+        let v_final = [0.2_f64, -0.2, 0.2, -0.2, 0.2, -0.2];
+        let ed_init = canonical_thermal(6, 3, 3, 1.0, 4.0, &v_init);
+        let ed_final = canonical_thermal(6, 3, 3, 1.0, 4.0, &v_final);
+        let theta = exact_theta_2(&ed_init, &ed_final, 2.0);
+        assert!(theta.is_finite(), "L=6 Theta_2 must be finite, got {theta}");
+        assert!(
+            theta > 0.0,
+            "L=6 non-commuting quench Theta_2 should be > 0, got {theta}"
         );
     }
 }
