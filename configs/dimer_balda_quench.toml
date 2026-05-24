@@ -1,0 +1,56 @@
+schema_version = "0.2"
+
+[meta]
+name = "dimer_balda_quench"
+description = "BALDA dimer with non-commuting comb-V quench, exercising theta_2.method = lda."
+created = "2026-05-24"
+tags = ["v0.5", "balda", "quench", "fdr"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 2
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 1
+beta = 2.0
+external_potential.kind = "uniform"
+external_potential.amplitude = 0.0
+
+[xc_functional]
+kind = "balda"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 400
+tolerance = 1e-10
+mixing.kind = "pulay"
+mixing.alpha = 0.1
+mixing.history_depth = 8
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "explicit"
+final_external_potential.values = [0.3, -0.3]
+
+[observables]
+mean_work = true
+irreversible_entropy = true
+work_variance = true
+theta_2.method = "lda"
+free_energy = true
+partition_function = true
+
+[output]
+directory = "runs/dimer_balda_quench"
+format = "json"
+overwrite = true
+
+[xc_functional.params]
+mott_gap_smoothing_width = 0.15
