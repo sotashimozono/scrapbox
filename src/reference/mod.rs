@@ -38,3 +38,4 @@ pub mod free_chain;
 pub mod heisenberg;
 pub mod high_t_expansion;
 pub mod identities;
+pub mod tpq;
