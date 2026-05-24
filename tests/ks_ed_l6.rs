@@ -106,5 +106,10 @@ fn l6_comb_v_ks_density_matches_ed_within_lda_error() {
             ks[i],
             n_ed[i]
         );
+        let same_dir = (ks[i] - 1.0).signum() == (n_ed[i] - 1.0).signum();
+        assert!(
+            same_dir || (n_ed[i] - 1.0).abs() < 1e-8,
+            "site {i}: KS and ED disagree on symmetry-breaking direction"
+        );
     }
 }
