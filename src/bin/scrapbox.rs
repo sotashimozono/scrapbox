@@ -28,6 +28,7 @@ SUBCOMMANDS:
     bench       `run` + wall-clock timing (later)
     doctor      Parse + dispatch only (later)
     ed          Many-body Hubbard ED dispatcher (dense / matrix-free Lanczos)
+    tpq         TPQ analysis dispatcher (density / work statistics; ed / matrix-free)
 
 See notes/discipline/HARNESS.md for the full design.
 ";
@@ -56,6 +57,7 @@ fn main() -> ExitCode {
         "bench" => dispatch(bench_subcommand(config_path)),
         "doctor" => dispatch(doctor_subcommand(config_path)),
         "ed" => dispatch(ed_subcommand(config_path)),
+        "tpq" => dispatch(tpq_subcommand(config_path)),
         _ => {
             eprintln!("scrapbox: unknown subcommand '{subcommand}'\n\n{USAGE}");
             ExitCode::from(2)
@@ -154,5 +156,42 @@ fn ed_subcommand(config_path: &str) -> Result<()> {
         ms = out.wall_time_ms,
         dir = resolved.display()
     );
+    Ok(())
+}
+
+fn tpq_subcommand(config_path: &str) -> Result<()> {
+    use scrapbox::many_body_tpq::TpqRunOutput;
+    let cfg = Config::from_file(config_path)?;
+    let out = scrapbox::many_body_tpq::run(&cfg)?;
+    let resolved = scrapbox::bin_support::resolve_output_dir(&cfg);
+    match &out {
+        TpqRunOutput::Density {
+            source,
+            dim,
+            n_samples,
+            wall_time_ms,
+            ..
+        } => {
+            eprintln!(
+                "scrapbox tpq: kind = density, source = {source}, dim = {dim}, samples = {n_samples} (wall {wall_time_ms} ms) -> {dir}",
+                dir = resolved.display()
+            );
+        }
+        TpqRunOutput::WorkStatistics {
+            source,
+            dim,
+            n_samples,
+            mean_w,
+            work_variance,
+            mean_w_stderr,
+            wall_time_ms,
+            ..
+        } => {
+            eprintln!(
+                "scrapbox tpq: kind = work_statistics, source = {source}, dim = {dim}, samples = {n_samples}, <W> = {mean_w:.6} (+/- {mean_w_stderr:.4}), sigma_W^2 = {work_variance:.6} (wall {wall_time_ms} ms) -> {dir}",
+                dir = resolved.display()
+            );
+        }
+    }
     Ok(())
 }
