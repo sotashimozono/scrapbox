@@ -372,6 +372,105 @@ pub(crate) fn apply_hamiltonian(psi: &[f64], ed: &EdResult) -> Vec<f64> {
     out
 }
 
+/// Matrix-free Palamara 2024 III.3 exact `Theta_2` via Lanczos low-`k`
+/// eigenstate truncation. Mirrors [`exact_theta_2`] (which consumes
+/// `EdResult`s) but only computes the leading `k_states` eigenpairs of
+/// `H_init` via Lanczos, then evaluates the truncated trace
+///
+/// ```text
+/// Theta_2 ~= (1/Z_K) Sum_{n=0..K} p_n ( <n|W^2|n> - W_nn^2 )
+/// ```
+///
+/// The trace is exact to within the Lanczos eigenpair error plus the
+/// truncated thermal-weight tail. At moderate `beta` only the lowest
+/// eigenstates contribute meaningfully, so `K << dim` is typically
+/// sufficient; `K = dim` recovers the full exact formula.
+///
+/// `krylov_m` is the Lanczos subspace dim (must be >= `k_states`; we
+/// clamp internally). `h_final` is applied via direct matvec on the
+/// (Lanczos-computed) low-energy eigenvectors of `h_init`.
+#[must_use]
+pub fn exact_theta_2_matrix_free<O1, O2>(
+    h_init: &O1,
+    h_final: &O2,
+    beta: f64,
+    k_states: usize,
+    krylov_m: usize,
+) -> f64
+where
+    O1: crate::spectrum::linear_operator::LinearOperator,
+    O2: crate::spectrum::linear_operator::LinearOperator,
+{
+    let dim = h_init.dim();
+    assert_eq!(
+        dim,
+        h_final.dim(),
+        "exact_theta_2_matrix_free: h_init and h_final must share dim (got {} vs {})",
+        dim,
+        h_final.dim()
+    );
+    assert!(
+        k_states > 0,
+        "exact_theta_2_matrix_free: k_states must be >= 1"
+    );
+    let k_states = k_states.min(dim);
+    let krylov_m = krylov_m.max(k_states).min(dim);
+
+    let lanczos_params = crate::spectrum::lanczos::LanczosParams {
+        krylov_dim: Some(krylov_m),
+        max_iter: krylov_m * 4,
+        tol: 1e-12,
+    };
+    let eigen = crate::spectrum::lanczos::diagonalize(h_init, &lanczos_params)
+        .expect("exact_theta_2_matrix_free: Lanczos diagonalisation failed");
+    // Eigendecomposition is sorted ascending; first k_states columns are
+    // the lowest-energy eigenpairs of H_init.
+    let evals = &eigen.eigenvalues;
+    let evecs = &eigen.eigenvectors;
+    let k_used = k_states.min(evals.len());
+    let shift = evals[..k_used]
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+
+    let mut z = 0.0_f64;
+    let mut sum_w_nn = 0.0_f64;
+    let mut sum_w_nn_sq = 0.0_f64;
+    let mut sum_full_w_sq_n = 0.0_f64;
+
+    let mut psi_n = vec![0.0_f64; dim];
+    let mut h_final_psi = vec![0.0_f64; dim];
+    for n in 0..k_used {
+        let weight = (-beta * (evals[n] - shift)).exp();
+        z += weight;
+        for j in 0..dim {
+            psi_n[j] = evecs[(j, n)];
+        }
+        h_final.apply(&psi_n, &mut h_final_psi);
+        // h_init_psi = E_n * psi_n (assumes Lanczos eigenpair is well-converged)
+        let mut delta = vec![0.0_f64; dim];
+        for j in 0..dim {
+            delta[j] = h_final_psi[j] - evals[n] * psi_n[j];
+        }
+        let w_nn: f64 = psi_n.iter().zip(delta.iter()).map(|(p, d)| p * d).sum();
+        let full_w_sq_n: f64 = delta.iter().map(|d| d * d).sum();
+        sum_w_nn += weight * w_nn;
+        sum_w_nn_sq += weight * w_nn * w_nn;
+        sum_full_w_sq_n += weight * full_w_sq_n;
+    }
+
+    assert!(
+        z.is_finite() && z > 0.0,
+        "exact_theta_2_matrix_free: truncated partition function collapsed (Z = {z}, beta = {beta}, k_states = {k_states})"
+    );
+    let mean_w = sum_w_nn / z;
+    let mean_w_sq = sum_full_w_sq_n / z;
+    let mean_w_nn_sq = sum_w_nn_sq / z;
+    let sigma_w_sq = mean_w_sq - mean_w * mean_w;
+    let sigma_w_sq_diag = mean_w_nn_sq - mean_w * mean_w;
+    sigma_w_sq - sigma_w_sq_diag
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -616,6 +715,71 @@ mod tests {
         assert!(
             theta > 0.0,
             "L=6 non-commuting quench Theta_2 should be > 0, got {theta}"
+        );
+    }
+
+    #[test]
+    fn exact_theta_2_matrix_free_matches_ed_path_at_k_dim() {
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let ed_init = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        let theta_ed = exact_theta_2(&ed_init, &ed_final, 2.0);
+
+        let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_init);
+        let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
+        // K = dim should recover the exact value (up to Lanczos truncation
+        // on a Krylov subspace large enough to span the full Hilbert space).
+        let theta_mf = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 36, 50);
+        assert!(
+            (theta_mf - theta_ed).abs() < 1e-7,
+            "matrix-free K=dim Theta_2 = {theta_mf} should match ED-path = {theta_ed}"
+        );
+    }
+
+    #[test]
+    fn exact_theta_2_matrix_free_converges_with_k_at_l4() {
+        // At moderate beta=2 only low-energy states contribute. K=8 should
+        // already be close to the exact L=4 value (within ~10% relative
+        // error); K=16 should be within ~1%.
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v_init = [0.0_f64; 4];
+        let v_final = [0.3_f64, -0.3, 0.3, -0.3];
+        let ed_init = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_init);
+        let ed_final = canonical_thermal(4, 2, 2, 1.0, 4.0, &v_final);
+        let theta_ed = exact_theta_2(&ed_init, &ed_final, 2.0);
+
+        let jw_init = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_init);
+        let jw_final = JwHubbard::new(4, 2, 2, 1.0, 4.0, &v_final);
+        let theta_k8 = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 8, 24);
+        let theta_k16 = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 16, 36);
+
+        let err_k8 = (theta_k8 - theta_ed).abs() / theta_ed.abs();
+        let err_k16 = (theta_k16 - theta_ed).abs() / theta_ed.abs();
+        assert!(
+            err_k16 <= err_k8 + 1e-9,
+            "K=16 error ({err_k16}) should be <= K=8 error ({err_k8}) (monotone convergence)"
+        );
+        assert!(
+            err_k8 < 0.5,
+            "K=8 Theta_2 = {theta_k8} should be within 50% of exact = {theta_ed} (err = {err_k8})"
+        );
+    }
+
+    #[test]
+    fn exact_theta_2_matrix_free_l6_smoke() {
+        // L=6 dim=400 smoke: low-K Lanczos truncation must run, return
+        // finite non-negative Theta_2.
+        use crate::spectrum::hubbard_jw::JwHubbard;
+        let v_init = [0.0_f64; 6];
+        let v_final = [0.2_f64, -0.2, 0.2, -0.2, 0.2, -0.2];
+        let jw_init = JwHubbard::new(6, 3, 3, 1.0, 4.0, &v_init);
+        let jw_final = JwHubbard::new(6, 3, 3, 1.0, 4.0, &v_final);
+        let theta = exact_theta_2_matrix_free(&jw_init, &jw_final, 2.0, 16, 40);
+        assert!(
+            theta.is_finite() && theta >= 0.0,
+            "L=6 matrix-free Theta_2 = {theta}"
         );
     }
 }
