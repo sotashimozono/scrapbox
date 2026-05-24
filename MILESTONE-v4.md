@@ -18,7 +18,7 @@ turn the harness into a teaching artefact.
   - U=0 free-energy matches the single-particle Pratt recursion on
     the OBC spectrum (cross-method consistency at the U=0 limit)
   - L=6 KS-vs-ED integration test (`tests/ks_ed_l6.rs`) for both
-    uniform V (machine precision) and small comb V (LDA error <2%).
+    uniform V (to 1e-10) and small comb V (LDA error <2%).
 
 - **Demonstration configs + index** (PR #21, batch δ)
   Three "what does the physics do here" configs and a single
@@ -50,18 +50,17 @@ etc.) work as documented in MILESTONE-v3.
 - **γ.1 - L=6 ED Hilbert dim**: `C(6, 3)^2 = 400` (PR #20).
 - **γ.2 - L=6 free chain cross-method consistency**: `reference::ed` at
   U=0 matches `reference::free_chain::free_energy` to 1e-9 (PR #20).
-- **γ.3 - L=6 KS-vs-ED at uniform V**: machine precision (PR #20).
+- **γ.3 - L=6 KS-vs-ED at uniform V**: to 1e-10 (PR #20).
 - **γ.4 - L=6 KS-vs-ED at small comb V**: LDA error < 2% (PR #20).
 - **δ.1 - mott crossover sweep**: 6 U cells converge with Pulay (PR #21).
 - **δ.2 - cdw response sweep**: 5 v cells converge (PR #21).
-- **δ.3 - non-commuting quench**: FDR residual `~ -3.4e-4` recorded
-  in `runs/quench_w_squared_l4/observables.json` (PR #21).
+- **δ.3 - non-commuting quench**: FDR residual `~ -3.4e-4` (local artefact, regenerate via `scrapbox run configs/quench_w_squared_l4.toml`; `runs/` is gitignored) (PR #21).
 
 ## Tests at tag time
 
 *(Snapshot - authoritative source is `cargo test`.)*
 
-- ~134 tests (109 unit + 25 integration), all green
+- ~128 tests (110 unit + 18 integration), all green
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   clean
 - `cargo fmt --check` clean
