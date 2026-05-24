@@ -757,6 +757,11 @@ pub struct TpqSpec {
     /// Krylov subspace dim per sample (`matrix_free` only); default 30.
     #[serde(default)]
     pub krylov_m: Option<usize>,
+    /// Number of low-energy Lanczos eigenstates to keep for matrix-free
+    /// exact `Theta_2` (`kind = "theta_2"`, `source = "matrix_free"`);
+    /// default 16. Has no effect for other `kind` / `source` combinations.
+    #[serde(default)]
+    pub theta_2_k_states: Option<usize>,
 }
 
 #[cfg(test)]

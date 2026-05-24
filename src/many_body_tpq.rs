@@ -81,9 +81,7 @@ pub fn run(cfg: &Config) -> Result<TpqRunOutput> {
         }
         (TpqKind::Theta2, TpqSource::Ed) => run_theta_2_ed(cfg, &v_ext, n_up, n_dn, beta)?,
         (TpqKind::Theta2, TpqSource::MatrixFree) => {
-            return Err(ScrapboxError::ConfigValidation {
-                message: "[tpq] kind = \"theta_2\" source = \"matrix_free\" is reserved for v0.10 batch beta and not implemented yet".into(),
-            });
+            run_theta_2_mf(cfg, &v_ext, n_up, n_dn, beta, tpq_cfg)?
         }
     };
 
@@ -293,6 +291,50 @@ fn run_theta_2_ed(
     let elapsed = start.elapsed().as_millis();
     Ok(TpqRunOutput::Theta2 {
         source: "ed",
+        dim,
+        beta,
+        theta_2,
+        wall_time_ms: elapsed,
+    })
+}
+
+fn run_theta_2_mf(
+    cfg: &Config,
+    v_init: &[f64],
+    n_up: usize,
+    n_dn: usize,
+    beta: f64,
+    tpq_cfg: &TpqSpec,
+) -> Result<TpqRunOutput> {
+    let v_final = resolve_v_final(cfg)?;
+    let jw_init = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        v_init,
+    );
+    let jw_final = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_final,
+    );
+    let dim = jw_init.dim();
+    let k_states = tpq_cfg.theta_2_k_states.unwrap_or(16).min(dim);
+    let krylov_m = tpq_cfg
+        .krylov_m
+        .unwrap_or(k_states * 2)
+        .max(k_states)
+        .min(dim);
+    let start = Instant::now();
+    let theta_2 = ed::exact_theta_2_matrix_free(&jw_init, &jw_final, beta, k_states, krylov_m);
+    let elapsed = start.elapsed().as_millis();
+    Ok(TpqRunOutput::Theta2 {
+        source: "matrix_free",
         dim,
         beta,
         theta_2,
