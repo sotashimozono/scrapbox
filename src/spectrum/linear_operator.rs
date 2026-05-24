@@ -14,7 +14,9 @@
 //! - **sparse** CSR-form Hubbard Hamiltonians
 //! - any future custom representation (matrix-free, structured, ...)
 
+use crate::reference::ed::{enumerate_basis, fermion_sign};
 use faer::Mat;
+use std::collections::HashMap;
 
 /// Anything that can apply `y = H x` for real-symmetric `H`.
 ///
@@ -122,6 +124,133 @@ impl SparseMatrix {
     #[must_use]
     pub fn nnz(&self) -> usize {
         self.values.len()
+    }
+
+    /// Build the CSR representation of the 1D inhomogeneous Hubbard
+    /// Hamiltonian on the joint Jordan-Wigner occupation-bitmask basis,
+    /// using exactly the same convention as
+    /// [`crate::reference::ed::canonical_thermal`] and
+    /// [`crate::spectrum::hubbard_jw::JwHubbard`].
+    ///
+    /// `v_ext.len()` must equal `num_sites`. The result is symmetric:
+    /// per-direction hop loops over all basis states emit each
+    /// off-diagonal entry exactly once on its own side; the conjugate
+    /// is filled when iteration reaches the other basis state.
+    #[must_use]
+    pub fn from_hubbard(
+        num_sites: usize,
+        n_up: usize,
+        n_dn: usize,
+        hopping_j: f64,
+        on_site_u: f64,
+        v_ext: &[f64],
+    ) -> Self {
+        assert_eq!(
+            v_ext.len(),
+            num_sites,
+            "v_ext length {} must equal num_sites {}",
+            v_ext.len(),
+            num_sites
+        );
+        let basis_up = enumerate_basis(num_sites, n_up);
+        let basis_dn = if n_up == n_dn {
+            basis_up.clone()
+        } else {
+            enumerate_basis(num_sites, n_dn)
+        };
+        let m_up = basis_up.len();
+        let m_dn = basis_dn.len();
+        let dim = m_up * m_dn;
+        let lookup_up: HashMap<u32, usize> =
+            basis_up.iter().enumerate().map(|(i, &m)| (m, i)).collect();
+        let lookup_dn: HashMap<u32, usize> =
+            basis_dn.iter().enumerate().map(|(i, &m)| (m, i)).collect();
+
+        let mut triples: Vec<(usize, usize, f64)> = Vec::new();
+
+        for up_idx in 0..m_up {
+            for dn_idx in 0..m_dn {
+                let r = up_idx * m_dn + dn_idx;
+                let up_mask = basis_up[up_idx];
+                let dn_mask = basis_dn[dn_idx];
+
+                let doubles = f64::from((up_mask & dn_mask).count_ones());
+                let mut diag = on_site_u * doubles;
+                for (i, &v) in v_ext.iter().enumerate() {
+                    let occ = f64::from(((up_mask >> i) & 1) + ((dn_mask >> i) & 1));
+                    diag += v * occ;
+                }
+                triples.push((r, r, diag));
+
+                emit_spin_hops(
+                    &mut triples,
+                    up_mask,
+                    &lookup_up,
+                    up_idx,
+                    dn_idx,
+                    m_dn,
+                    num_sites,
+                    hopping_j,
+                    true,
+                );
+                emit_spin_hops(
+                    &mut triples,
+                    dn_mask,
+                    &lookup_dn,
+                    up_idx,
+                    dn_idx,
+                    m_dn,
+                    num_sites,
+                    hopping_j,
+                    false,
+                );
+            }
+        }
+
+        Self::from_triples(dim, &triples)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_spin_hops(
+    triples: &mut Vec<(usize, usize, f64)>,
+    mask: u32,
+    lookup: &HashMap<u32, usize>,
+    up_idx: usize,
+    dn_idx: usize,
+    m_dn: usize,
+    num_sites: usize,
+    hopping_j: f64,
+    spin_up: bool,
+) {
+    let r = up_idx * m_dn + dn_idx;
+    for bond in 0..num_sites.saturating_sub(1) {
+        if (mask >> bond) & 1 == 1 && (mask >> (bond + 1)) & 1 == 0 {
+            let after = mask & !(1_u32 << bond);
+            let s1 = fermion_sign(mask, bond);
+            let new_mask = after | (1_u32 << (bond + 1));
+            let s2 = fermion_sign(after, bond + 1);
+            let new_idx = lookup[&new_mask];
+            let r_new = if spin_up {
+                new_idx * m_dn + dn_idx
+            } else {
+                up_idx * m_dn + new_idx
+            };
+            triples.push((r_new, r, -hopping_j * s1 * s2));
+        }
+        if (mask >> (bond + 1)) & 1 == 1 && (mask >> bond) & 1 == 0 {
+            let after = mask & !(1_u32 << (bond + 1));
+            let s1 = fermion_sign(mask, bond + 1);
+            let new_mask = after | (1_u32 << bond);
+            let s2 = fermion_sign(after, bond);
+            let new_idx = lookup[&new_mask];
+            let r_new = if spin_up {
+                new_idx * m_dn + dn_idx
+            } else {
+                up_idx * m_dn + new_idx
+            };
+            triples.push((r_new, r, -hopping_j * s1 * s2));
+        }
     }
 }
 

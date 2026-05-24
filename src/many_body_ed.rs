@@ -77,13 +77,7 @@ pub fn run(cfg: &Config) -> Result<EdSpectrumOutput> {
     let out = match ed_cfg.solver {
         EdSolver::Dense => run_dense(cfg, &v_ext, n_up, n_dn, ed_cfg),
         EdSolver::MatrixFreeLanczos => run_matrix_free(cfg, &v_ext, n_up, n_dn, ed_cfg)?,
-        EdSolver::SparseLanczos => {
-            return Err(ScrapboxError::ConfigValidation {
-                message: "[ed].solver = \"sparse_lanczos\" is reserved for v0.7 batch beta and \
-                          not implemented yet"
-                    .into(),
-            });
-        }
+        EdSolver::SparseLanczos => run_sparse(cfg, &v_ext, n_up, n_dn, ed_cfg)?,
     };
 
     let out_dir = crate::bin_support::resolve_output_dir(cfg);
@@ -169,4 +163,41 @@ fn write_output_json(path: &Path, out: &EdSpectrumOutput) -> Result<()> {
     })?;
     serde_json::to_writer_pretty(file, out)?;
     Ok(())
+}
+fn run_sparse(
+    cfg: &Config,
+    v_ext: &[f64],
+    n_up: usize,
+    n_dn: usize,
+    ed_cfg: &EdSpec,
+) -> Result<EdSpectrumOutput> {
+    let sparse = crate::spectrum::linear_operator::SparseMatrix::from_hubbard(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        v_ext,
+    );
+    let dim = sparse.dim();
+    let k_request = ed_cfg.num_eigenvalues.unwrap_or(8).min(dim);
+    let krylov_dim = (k_request * 10).clamp(20, dim);
+    let params = LanczosParams {
+        krylov_dim: Some(krylov_dim),
+        max_iter: krylov_dim * 4,
+        tol: 1e-12,
+    };
+    let start = Instant::now();
+    let eig = diagonalize(&sparse, &params)?;
+    let elapsed = start.elapsed().as_millis();
+    let mut vals = eig.eigenvalues;
+    vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    vals.truncate(k_request);
+    Ok(EdSpectrumOutput {
+        solver: "sparse_lanczos",
+        dim,
+        num_eigenvalues_returned: vals.len(),
+        eigenvalues: vals,
+        wall_time_ms: elapsed,
+    })
 }

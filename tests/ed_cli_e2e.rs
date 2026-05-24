@@ -142,14 +142,26 @@ fn ed_cli_matrix_free_low_spectrum_matches_dense_at_l4() {
 }
 
 #[test]
-fn ed_cli_rejects_sparse_lanczos_until_beta() {
+fn ed_cli_sparse_lanczos_low_spectrum_matches_dense_at_l4() {
     let manifest = env!("CARGO_MANIFEST_DIR");
-    let cfg = std::path::Path::new(manifest).join("configs/_test_ed_sparse_unimpl.toml");
-    write_config(&cfg, "sparse_unimpl", "sparse_lanczos", Some(4));
-    let status = invoke_ed(&cfg);
-    assert!(
-        !status.success(),
-        "sparse_lanczos must error until v0.7 beta lands"
-    );
-    std::fs::remove_file(&cfg).ok();
+    let cfg_d = std::path::Path::new(manifest).join("configs/_test_ed_dense_for_sparse.toml");
+    write_config(&cfg_d, "dense_for_sparse", "dense", Some(4));
+    assert!(invoke_ed(&cfg_d).success());
+    let dense = read_eigenvalues("runs/ed_cli_e2e_dense_for_sparse");
+    let cfg_s = std::path::Path::new(manifest).join("configs/_test_ed_sparse.toml");
+    write_config(&cfg_s, "sparse", "sparse_lanczos", Some(4));
+    assert!(invoke_ed(&cfg_s).success());
+    let sp = read_eigenvalues("runs/ed_cli_e2e_sparse");
+    assert_eq!(dense.len(), 4);
+    assert_eq!(sp.len(), 4);
+    for k in 0..4 {
+        assert!(
+            (dense[k] - sp[k]).abs() < 1e-6,
+            "level {k}: dense={}, sparse={}",
+            dense[k],
+            sp[k]
+        );
+    }
+    std::fs::remove_file(&cfg_d).ok();
+    std::fs::remove_file(&cfg_s).ok();
 }
