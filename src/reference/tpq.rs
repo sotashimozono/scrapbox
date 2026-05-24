@@ -544,7 +544,7 @@ pub fn tpq_density_matrix_free(
 }
 
 /// Two-Hamiltonian matrix-free TPQ work statistics for a sudden quench
-/// `H_init -> H_final`, both supplied as [`LinearOperator`]s.
+/// `H_init -> H_final`, both supplied as `LinearOperator` impls.
 ///
 /// Mirrors [`tpq_work_statistics`] (which takes ED `EdResult`s) but runs
 /// entirely matrix-free: the canonical thermal state is built via
