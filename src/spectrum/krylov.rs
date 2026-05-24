@@ -27,19 +27,107 @@
 use super::linear_operator::LinearOperator;
 use faer::{Mat, Side};
 
-/// Krylov approximation of `exp(scale * H) * psi` with an `m`-step
-/// Lanczos. Returns a vector of `op.dim()` length. `m` is clamped to
-/// `op.dim()`. Re-orthogonalises against all prior basis vectors at
-/// every step (modified Gram-Schmidt) for numerical stability.
+/// Cached Lanczos Krylov subspace generated from `(op, psi, m)`.
+///
+/// The underlying tridiagonal `T_m` and orthonormal basis `Q` are
+/// independent of any spectral function applied afterwards, so the
+/// expensive `m` matvecs of building the subspace can be amortised
+/// across many evaluations of `exp(scale * H) * psi` at different
+/// `scale` values (e.g. a beta sweep over TPQ exp-tilt strengths).
+///
+/// The empty subspace (`psi` was numerically zero) is represented by
+/// an empty `alphas`; [`KrylovSubspace::apply_expm`] returns a zero
+/// vector in that case.
 #[must_use]
-pub fn expm_apply<O: LinearOperator>(op: &O, scale: f64, psi: &[f64], m: usize) -> Vec<f64> {
+pub struct KrylovSubspace {
+    /// `||psi||` of the original starting vector. Restored on output.
+    pub norm: f64,
+    /// Length-`n` Lanczos basis vectors, in build order.
+    pub q_vecs: Vec<Vec<f64>>,
+    /// Diagonal entries of the tridiagonal `T_m`.
+    pub alphas: Vec<f64>,
+    /// Off-diagonal entries; `betas[m - 1]` is the residual norm and is
+    /// not needed by [`apply_expm`] but is kept for diagnostics.
+    pub betas: Vec<f64>,
+}
+
+impl KrylovSubspace {
+    /// Krylov subspace size that was actually built.
+    ///
+    /// Equals the requested `m` unless an invariant subspace forced
+    /// early exit.
+    #[must_use]
+    pub fn dim(&self) -> usize {
+        self.alphas.len()
+    }
+
+    /// Evaluate `exp(scale * H) * psi` using the cached `(Q, T_m)`.
+    ///
+    /// Costs an `m x m` EVD plus an `O(n * m)` lift back to the full
+    /// space; the `m` matvecs that built the subspace are not redone.
+    /// Used by [`expm_apply_multi_scale`] for beta sweeps.
+    #[must_use]
+    pub fn apply_expm(&self, scale: f64) -> Vec<f64> {
+        let n = self.q_vecs.first().map_or(0, Vec::len);
+        if n == 0 || self.norm == 0.0 || self.alphas.is_empty() {
+            return vec![0.0; n];
+        }
+        let actual_m = self.alphas.len();
+        let mut t = Mat::<f64>::zeros(actual_m, actual_m);
+        for k in 0..actual_m {
+            t[(k, k)] = self.alphas[k];
+            if k + 1 < actual_m {
+                t[(k, k + 1)] = self.betas[k];
+                t[(k + 1, k)] = self.betas[k];
+            }
+        }
+        let eigen = t
+            .self_adjoint_eigen(Side::Lower)
+            .expect("Krylov tridiagonal EVD failed");
+        let evals = eigen.S().column_vector();
+        let u_t = eigen.U();
+        let mut c = vec![0.0_f64; actual_m];
+        for k in 0..actual_m {
+            c[k] = (scale * evals[k]).exp() * u_t[(0, k)];
+        }
+        let mut y_m = vec![0.0_f64; actual_m];
+        for i in 0..actual_m {
+            let mut acc = 0.0_f64;
+            for k in 0..actual_m {
+                acc += u_t[(i, k)] * c[k];
+            }
+            y_m[i] = acc;
+        }
+        let mut y = vec![0.0_f64; n];
+        for (i, q) in self.q_vecs.iter().enumerate() {
+            for j in 0..n {
+                y[j] += self.norm * y_m[i] * q[j];
+            }
+        }
+        y
+    }
+}
+
+/// Build an `m`-step Lanczos Krylov subspace for the pair `(op, psi)`
+/// with full re-orthogonalisation.
+///
+/// The result can be reused across many spectral function evaluations
+/// via [`KrylovSubspace::apply_expm`]. Used by
+/// [`expm_apply_multi_scale`] to amortise matvec cost across a beta
+/// sweep at fixed `H` and fixed `psi`.
+pub fn build_krylov_subspace<O: LinearOperator>(op: &O, psi: &[f64], m: usize) -> KrylovSubspace {
     let n = op.dim();
     assert_eq!(psi.len(), n, "psi.len() = {} != op.dim() = {n}", psi.len());
     let m = m.min(n).max(1);
 
     let norm = psi.iter().map(|x| x * x).sum::<f64>().sqrt();
     if norm == 0.0 {
-        return vec![0.0; n];
+        return KrylovSubspace {
+            norm: 0.0,
+            q_vecs: vec![vec![0.0; n]],
+            alphas: Vec::new(),
+            betas: Vec::new(),
+        };
     }
 
     let mut q_prev = vec![0.0_f64; n];
@@ -79,43 +167,42 @@ pub fn expm_apply<O: LinearOperator>(op: &O, scale: f64, psi: &[f64], m: usize) 
         beta_prev = beta_k;
     }
 
-    let actual_m = alphas.len();
-
-    let mut t = Mat::<f64>::zeros(actual_m, actual_m);
-    for k in 0..actual_m {
-        t[(k, k)] = alphas[k];
-        if k + 1 < actual_m {
-            t[(k, k + 1)] = betas[k];
-            t[(k + 1, k)] = betas[k];
-        }
+    KrylovSubspace {
+        norm,
+        q_vecs,
+        alphas,
+        betas,
     }
+}
 
-    let eigen = t
-        .self_adjoint_eigen(Side::Lower)
-        .expect("Krylov tridiagonal EVD failed");
-    let evals = eigen.S().column_vector();
-    let u_t = eigen.U();
+/// Krylov approximation of `exp(scale * H) * psi` with an `m`-step
+/// Lanczos. Returns a vector of `op.dim()` length. `m` is clamped to
+/// `op.dim()`. Re-orthogonalises against all prior basis vectors at
+/// every step (modified Gram-Schmidt) for numerical stability.
+#[must_use]
+pub fn expm_apply<O: LinearOperator>(op: &O, scale: f64, psi: &[f64], m: usize) -> Vec<f64> {
+    build_krylov_subspace(op, psi, m).apply_expm(scale)
+}
 
-    let mut c = vec![0.0_f64; actual_m];
-    for k in 0..actual_m {
-        c[k] = (scale * evals[k]).exp() * u_t[(0, k)];
-    }
-    let mut y_m = vec![0.0_f64; actual_m];
-    for i in 0..actual_m {
-        let mut acc = 0.0_f64;
-        for k in 0..actual_m {
-            acc += u_t[(i, k)] * c[k];
-        }
-        y_m[i] = acc;
-    }
-
-    let mut y = vec![0.0_f64; n];
-    for (i, q) in q_vecs.iter().enumerate() {
-        for j in 0..n {
-            y[j] += norm * y_m[i] * q[j];
-        }
-    }
-    y
+/// Evaluate `exp(scale_i * H) * psi` for every `scale_i` in `scales`,
+/// reusing a single Krylov subspace built for `(op, psi, m)`.
+///
+/// Cost scales as `O(m * matvec + |scales| * m^3 + |scales| * n * m)`
+/// versus `O(|scales| * m * matvec)` for naive per-scale
+/// [`expm_apply`]. For TPQ beta sweeps at fixed `H` and `psi` this
+/// turns matvec cost from `O(K * m)` to `O(m)`, often a 10-100x
+/// speedup at large `n`.
+///
+/// Output ordering matches `scales`.
+#[must_use]
+pub fn expm_apply_multi_scale<O: LinearOperator>(
+    op: &O,
+    psi: &[f64],
+    scales: &[f64],
+    m: usize,
+) -> Vec<Vec<f64>> {
+    let subspace = build_krylov_subspace(op, psi, m);
+    scales.iter().map(|&s| subspace.apply_expm(s)).collect()
 }
 
 /// Adaptive Krylov subspace exponentiation: same contract as
@@ -502,5 +589,68 @@ mod tests {
             assert!(v.abs() < 1e-300);
         }
         assert_eq!(m, 0);
+    }
+
+    #[test]
+    fn expm_apply_multi_scale_matches_per_scale_expm_apply() {
+        // v0.12 beta: building one Krylov subspace and evaluating at
+        // K scales must agree with calling expm_apply K times.
+        let triples = [
+            (0, 0, 2.0),
+            (1, 1, 3.0),
+            (2, 2, 5.0),
+            (3, 3, 7.0),
+            (4, 4, 11.0),
+            (0, 1, -1.0),
+            (1, 0, -1.0),
+            (1, 2, -0.5),
+            (2, 1, -0.5),
+            (2, 3, -0.3),
+            (3, 2, -0.3),
+            (3, 4, -0.2),
+            (4, 3, -0.2),
+        ];
+        let sparse = SparseMatrix::from_triples(5, &triples);
+        let psi = vec![0.3, -0.7, 0.5, 0.2, 0.1];
+        let scales = [-0.5, -1.0, -2.0, -3.0, -5.0];
+        let m = 5;
+
+        let multi = expm_apply_multi_scale(&sparse, &psi, &scales, m);
+        assert_eq!(multi.len(), scales.len());
+        for (i, &s) in scales.iter().enumerate() {
+            let single = expm_apply(&sparse, s, &psi, m);
+            for (a, b) in multi[i].iter().zip(single.iter()) {
+                assert!(
+                    (a - b).abs() < 1e-12,
+                    "scale {s}: multi = {a}, single = {b}, delta = {}",
+                    (a - b).abs()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn build_krylov_subspace_dim_clamps_to_op_dim() {
+        // Requesting m = 100 on a 3-dim operator returns at most 3.
+        let sparse = SparseMatrix::from_triples(3, &[(0, 0, 1.0), (1, 1, 2.0), (2, 2, 3.0)]);
+        let subspace = build_krylov_subspace(&sparse, &[1.0, 0.0, 0.0], 100);
+        assert!(subspace.dim() <= 3, "dim {} must be <= 3", subspace.dim());
+        // Diagonal operator with e_0 start: alpha_0 = 1, beta_0 = 0
+        // (invariant subspace at k = 0), so dim should be exactly 1.
+        assert_eq!(subspace.dim(), 1);
+    }
+
+    #[test]
+    fn build_krylov_subspace_zero_input_yields_empty_alphas() {
+        let sparse = SparseMatrix::from_triples(3, &[(0, 0, 1.0), (1, 1, 2.0), (2, 2, 3.0)]);
+        let subspace = build_krylov_subspace(&sparse, &[0.0; 3], 5);
+        assert!(subspace.norm.abs() < f64::EPSILON);
+        assert_eq!(subspace.dim(), 0);
+        // apply_expm on empty subspace must return zero vector of correct length.
+        let y = subspace.apply_expm(-1.0);
+        assert_eq!(y.len(), 3);
+        for &v in &y {
+            assert!(v.abs() < f64::EPSILON);
+        }
     }
 }
