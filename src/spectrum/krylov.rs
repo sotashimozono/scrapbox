@@ -47,7 +47,7 @@ pub struct KrylovSubspace {
     /// Diagonal entries of the tridiagonal `T_m`.
     pub alphas: Vec<f64>,
     /// Off-diagonal entries; `betas[m - 1]` is the residual norm and is
-    /// not needed by [`apply_expm`] but is kept for diagnostics.
+    /// not needed by [`Self::apply_expm`] but is kept for diagnostics.
     pub betas: Vec<f64>,
 }
 
