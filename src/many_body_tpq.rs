@@ -111,6 +111,16 @@ pub struct TpqSweepBetaWorkRow {
     pub mean_w_stderr: f64,
 }
 
+/// One row of a beta-sweep theta_2 result (v0.15 alpha).
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqSweepBetaTheta2Row {
+    /// Inverse temperature this row was evaluated at.
+    pub beta: f64,
+    /// Off-diagonal work-variance contribution
+    /// (Palamara 2024 III.3 `Theta_2`) at this beta.
+    pub theta_2: f64,
+}
+
 /// One row of a seed-sweep density result (v0.14 delta).
 #[derive(Debug, Clone, Serialize)]
 pub struct TpqSweepSeedRow {
@@ -164,6 +174,22 @@ pub enum TpqSweepRunOutput {
         seed: u64,
         axis: &'static str,
         rows: Vec<TpqSweepBetaWorkRow>,
+        wall_time_ms: u128,
+        krylov_stats: KrylovStatsJson,
+    },
+    /// Beta-sweep theta_2 rows (v0.15 alpha).
+    #[serde(rename = "theta_2")]
+    Theta2 {
+        source: &'static str,
+        dim: usize,
+        n_samples: usize,
+        /// Echoed from [tpq].seed for schema parity with the density
+        /// and work_statistics variants. theta_2 evaluators (ed and
+        /// matrix-free) are deterministic given (jw_init, jw_final,
+        /// beta), so this field has no effect on the output rows.
+        seed: u64,
+        axis: &'static str,
+        rows: Vec<TpqSweepBetaTheta2Row>,
         wall_time_ms: u128,
         krylov_stats: KrylovStatsJson,
     },
@@ -546,10 +572,16 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
         (crate::config::TpqSweepAxis::Seed, TpqKind::Density, TpqSource::MatrixFree) => {
             run_sweep_seed_density_mf(cfg, tpq_cfg, sweep_cfg)
         }
+        (crate::config::TpqSweepAxis::Beta, TpqKind::Theta2, TpqSource::Ed) => {
+            run_sweep_beta_theta_2_ed(cfg, tpq_cfg, sweep_cfg)?
+        }
+        (crate::config::TpqSweepAxis::Beta, TpqKind::Theta2, TpqSource::MatrixFree) => {
+            run_sweep_beta_theta_2_mf(cfg, tpq_cfg, sweep_cfg)?
+        }
         (axis, kind, source) => {
             return Err(ScrapboxError::ConfigValidation {
                 message: format!(
-                    "[tpq.sweep] unsupported combination (axis = {axis:?},                      kind = {kind:?}, source = {source:?}); v0.14 gamma supports                      (beta, density, matrix_free), (beta, density, ed),                      (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free), (seed, density, matrix_free)"
+                    "[tpq.sweep] unsupported combination (axis = {axis:?}, kind = {kind:?}, source = {source:?}); v0.15 alpha supports (beta, density, matrix_free), (beta, density, ed), (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free), (seed, density, matrix_free), (beta, theta_2, ed), (beta, theta_2, matrix_free)"
                 ),
             });
         }
@@ -850,6 +882,128 @@ fn run_sweep_seed_density_mf(
         wall_time_ms: elapsed,
         krylov_stats: KrylovStatsJson::from(agg_stats),
     }
+}
+
+fn run_sweep_beta_theta_2_ed(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> Result<TpqSweepRunOutput> {
+    let v_init = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let v_final = resolve_v_final(cfg)?;
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let ed_init = ed::canonical_thermal(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_init,
+    );
+    let ed_final = ed::canonical_thermal(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_final,
+    );
+    let dim = ed_init.eigenvalues.len();
+    let betas: Vec<f64> = sweep_cfg.values.clone();
+    let start = Instant::now();
+    let rows_payload: Vec<TpqSweepBetaTheta2Row> = betas
+        .iter()
+        .map(|&beta| TpqSweepBetaTheta2Row {
+            beta,
+            theta_2: ed::exact_theta_2(&ed_init, &ed_final, beta),
+        })
+        .collect();
+    let elapsed = start.elapsed().as_millis();
+    Ok(TpqSweepRunOutput::Theta2 {
+        source: "ed",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        seed: tpq_cfg.seed,
+        axis: "beta",
+        rows: rows_payload,
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson {
+            min_m: 0,
+            max_m: 0,
+            mean_m: 0.0,
+        },
+    })
+}
+
+fn run_sweep_beta_theta_2_mf(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> Result<TpqSweepRunOutput> {
+    use crate::spectrum::linear_operator::LinearOperator;
+    let v_init = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let v_final = resolve_v_final(cfg)?;
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let jw_init = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_init,
+    );
+    let jw_final = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_final,
+    );
+    let dim = jw_init.dim();
+    let k_states = tpq_cfg.theta_2_k_states.unwrap_or(16).min(dim);
+    let krylov_m = tpq_cfg
+        .krylov_m
+        .unwrap_or(k_states * 2)
+        .max(k_states)
+        .min(dim);
+    let betas: Vec<f64> = sweep_cfg.values.clone();
+    let start = Instant::now();
+    let mut rows_payload: Vec<TpqSweepBetaTheta2Row> = Vec::with_capacity(betas.len());
+    let mut m_log: Vec<usize> = Vec::new();
+    for &beta in &betas {
+        let (theta_2, effective_m) = tpq_cfg.theta_2_lanczos_tol.map_or_else(
+            || ed::exact_theta_2_matrix_free(&jw_init, &jw_final, beta, k_states, krylov_m),
+            |tol| {
+                let max_m = tpq_cfg.krylov_m.unwrap_or(80).max(k_states).min(dim);
+                ed::exact_theta_2_matrix_free_adaptive(
+                    &jw_init, &jw_final, beta, k_states, tol, max_m,
+                )
+            },
+        );
+        m_log.push(effective_m);
+        rows_payload.push(TpqSweepBetaTheta2Row { beta, theta_2 });
+    }
+    let elapsed = start.elapsed().as_millis();
+    let agg_stats = KrylovStats::from_samples(&m_log);
+    Ok(TpqSweepRunOutput::Theta2 {
+        source: "matrix_free",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        seed: tpq_cfg.seed,
+        axis: "beta",
+        rows: rows_payload,
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson::from(agg_stats),
+    })
 }
 
 fn write_sweep_output_json(path: &Path, out: &TpqSweepRunOutput) -> Result<()> {
