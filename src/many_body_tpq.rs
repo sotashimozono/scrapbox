@@ -77,6 +77,33 @@ pub enum TpqRunOutput {
     },
 }
 
+/// One row of a `[tpq.sweep] axis = "beta"` sweep result.
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqSweepBetaRow {
+    /// Inverse temperature this row was evaluated at.
+    pub beta: f64,
+    /// Per-site canonical thermal density at this beta.
+    pub density: Vec<f64>,
+}
+
+/// Output payload emitted by `scrapbox tpq` when `[tpq.sweep]` is set.
+/// Written to `tpq_sweep_report.json` instead of `tpq_report.json`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum TpqSweepRunOutput {
+    /// Density rows over a beta sweep (matrix-free only in v0.13 alpha).
+    Density {
+        source: &'static str,
+        dim: usize,
+        n_samples: usize,
+        seed: u64,
+        axis: &'static str,
+        rows: Vec<TpqSweepBetaRow>,
+        wall_time_ms: u128,
+        krylov_stats: KrylovStatsJson,
+    },
+}
+
 pub fn run(cfg: &Config) -> Result<TpqRunOutput> {
     let tpq_cfg = cfg
         .tpq
@@ -390,6 +417,99 @@ fn run_theta_2_mf(
         wall_time_ms: elapsed,
         krylov_stats: Some(krylov_stats),
     })
+}
+
+/// Dispatch a `[tpq.sweep]` run. v0.13 alpha supports only the
+/// combination `axis = "beta"`, `kind = "density"`, `source =
+/// "matrix_free"`; any other combination returns
+/// [`ScrapboxError::ConfigValidation`].
+pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
+    let tpq_cfg = cfg
+        .tpq
+        .as_ref()
+        .ok_or_else(|| ScrapboxError::ConfigValidation {
+            message: "[tpq] section required for `scrapbox tpq` sweep dispatch".into(),
+        })?;
+    let sweep_cfg = tpq_cfg
+        .sweep
+        .as_ref()
+        .ok_or_else(|| ScrapboxError::ConfigValidation {
+            message: "[tpq.sweep] section required for sweep dispatch (set axis and values)".into(),
+        })?;
+    if sweep_cfg.values.is_empty() {
+        return Err(ScrapboxError::ConfigValidation {
+            message: "[tpq.sweep].values must be non-empty".into(),
+        });
+    }
+    if !matches!(sweep_cfg.axis, crate::config::TpqSweepAxis::Beta) {
+        return Err(ScrapboxError::ConfigValidation {
+            message: "v0.13 alpha only supports [tpq.sweep].axis = \"beta\"".into(),
+        });
+    }
+    if !matches!(tpq_cfg.kind, TpqKind::Density) {
+        return Err(ScrapboxError::ConfigValidation {
+            message: "v0.13 alpha [tpq.sweep] only supports [tpq].kind = \"density\"".into(),
+        });
+    }
+    if !matches!(tpq_cfg.source, TpqSource::MatrixFree) {
+        return Err(ScrapboxError::ConfigValidation {
+            message: "v0.13 alpha [tpq.sweep] only supports [tpq].source = \"matrix_free\"".into(),
+        });
+    }
+
+    let v_ext = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let jw = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_ext,
+    );
+    let dim = jw.dim();
+    let m = tpq_cfg.krylov_m.unwrap_or(30);
+    let betas: Vec<f64> = sweep_cfg.values.clone();
+    let start = Instant::now();
+    let (rows, krylov_stats) =
+        tpq::tpq_density_matrix_free_beta_sweep(&jw, &betas, tpq_cfg.n_samples, tpq_cfg.seed, m);
+    let elapsed = start.elapsed().as_millis();
+    let rows_payload: Vec<TpqSweepBetaRow> = betas
+        .iter()
+        .zip(rows)
+        .map(|(&beta, density)| TpqSweepBetaRow { beta, density })
+        .collect();
+    let out = TpqSweepRunOutput::Density {
+        source: "matrix_free",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        seed: tpq_cfg.seed,
+        axis: "beta",
+        rows: rows_payload,
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson::from(krylov_stats),
+    };
+    let out_dir = crate::bin_support::resolve_output_dir(cfg);
+    std::fs::create_dir_all(&out_dir).map_err(|source| ScrapboxError::Artifact {
+        path: out_dir.clone(),
+        message: format!("failed to create output dir: {source}"),
+    })?;
+    let out_path = out_dir.join("tpq_sweep_report.json");
+    write_sweep_output_json(&out_path, &out)?;
+    Ok(out)
+}
+
+fn write_sweep_output_json(path: &Path, out: &TpqSweepRunOutput) -> Result<()> {
+    let file = std::fs::File::create(path).map_err(|source| ScrapboxError::Artifact {
+        path: path.to_path_buf(),
+        message: format!("failed to write tpq_sweep_report.json: {source}"),
+    })?;
+    serde_json::to_writer_pretty(file, out)?;
+    Ok(())
 }
 
 fn write_output_json(path: &Path, out: &TpqRunOutput) -> Result<()> {

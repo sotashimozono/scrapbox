@@ -544,6 +544,84 @@ pub fn tpq_density_matrix_free(
     (acc_density, KrylovStats::from_samples(&m_used_log))
 }
 
+/// Matrix-free TPQ density at multiple inverse temperatures sharing one
+/// Krylov subspace per sample.
+///
+/// For each random `psi_0`, a single Lanczos subspace of size `m` is
+/// built against `jw`, then evaluated at every `beta_k` in `betas`
+/// via cached `(Q, T_m)`. Compared to running
+/// `tpq_density_matrix_free` once per beta this turns the matvec cost
+/// from `O(K * n_samples * m)` to `O(n_samples * m)` at the cost of
+/// an extra `K * n_samples * m^3` of dense tridiagonal EVDs (trivial
+/// for typical `m <= 80`).
+///
+/// Returns one density vector per `betas[k]`, in the same order, plus
+/// a single `KrylovStats` aggregating the per-sample subspace sizes
+/// (Lanczos built once per sample so `min_m == max_m == mean_m == m`
+/// in the fixed-`m` path).
+///
+/// Adaptive Krylov stopping is not threaded through here in v0.13
+/// alpha: the subspace size is fixed at `m` so that the cached
+/// `(Q, T_m)` can be reused across all betas without re-validation.
+/// Use `tpq_density_matrix_free` directly when adaptive stopping is
+/// needed.
+#[must_use]
+pub fn tpq_density_matrix_free_beta_sweep(
+    jw: &crate::spectrum::hubbard_jw::JwHubbard,
+    betas: &[f64],
+    n_samples: usize,
+    seed: u64,
+    m: usize,
+) -> (Vec<Vec<f64>>, KrylovStats) {
+    use crate::spectrum::krylov::build_krylov_subspace;
+    use crate::spectrum::linear_operator::LinearOperator;
+    assert!(n_samples > 0, "n_samples must be >= 1");
+    assert!(!betas.is_empty(), "betas must be non-empty");
+    let dim = jw.dim();
+    assert!(dim > 0, "JwHubbard dim must be > 0");
+    let num_sites = jw.num_sites();
+    let joint = jw.joint_masks();
+
+    let mut rng = StdRng::seed_from_u64(seed);
+    let mut acc_density: Vec<Vec<f64>> =
+        (0..betas.len()).map(|_| vec![0.0_f64; num_sites]).collect();
+    let mut acc_norm_sq: Vec<f64> = vec![0.0_f64; betas.len()];
+    let mut m_used_log: Vec<usize> = Vec::with_capacity(n_samples);
+
+    for _ in 0..n_samples {
+        let psi_0: Vec<f64> = (0..dim).map(|_| box_muller(&mut rng)).collect();
+        let subspace = build_krylov_subspace(jw, &psi_0, m);
+        m_used_log.push(subspace.dim());
+        for (k, &beta_k) in betas.iter().enumerate() {
+            let psi_beta = subspace.apply_expm(-beta_k * 0.5);
+            let mut sample_norm_sq = 0.0_f64;
+            for &p in &psi_beta {
+                sample_norm_sq += p * p;
+            }
+            for site in 0..num_sites {
+                let mut occ_acc = 0.0_f64;
+                for (j, &(up_mask, dn_mask)) in joint.iter().enumerate() {
+                    let occ = f64::from(((up_mask >> site) & 1) + ((dn_mask >> site) & 1));
+                    occ_acc += psi_beta[j] * psi_beta[j] * occ;
+                }
+                acc_density[k][site] += occ_acc;
+            }
+            acc_norm_sq[k] += sample_norm_sq;
+        }
+    }
+
+    for k in 0..betas.len() {
+        assert!(
+            acc_norm_sq[k] > 0.0,
+            "tpq_density_matrix_free_beta_sweep: accumulated norm at beta index {k} is zero"
+        );
+        for x in &mut acc_density[k] {
+            *x /= acc_norm_sq[k];
+        }
+    }
+    (acc_density, KrylovStats::from_samples(&m_used_log))
+}
+
 /// Two-Hamiltonian matrix-free TPQ work statistics for a sudden quench
 /// `H_init -> H_final`, both supplied as `LinearOperator` impls.
 ///

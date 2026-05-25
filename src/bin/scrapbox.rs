@@ -162,6 +162,9 @@ fn ed_subcommand(config_path: &str) -> Result<()> {
 fn tpq_subcommand(config_path: &str) -> Result<()> {
     use scrapbox::many_body_tpq::TpqRunOutput;
     let cfg = Config::from_file(config_path)?;
+    if cfg.tpq.as_ref().is_some_and(|t| t.sweep.is_some()) {
+        return tpq_sweep_subcommand(&cfg);
+    }
     let out = scrapbox::many_body_tpq::run(&cfg)?;
     let resolved = scrapbox::bin_support::resolve_output_dir(&cfg);
     match &out {
@@ -233,5 +236,31 @@ fn tpq_subcommand(config_path: &str) -> Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+fn tpq_sweep_subcommand(cfg: &Config) -> Result<()> {
+    use scrapbox::many_body_tpq::TpqSweepRunOutput;
+    let out = scrapbox::many_body_tpq::run_sweep(cfg)?;
+    let resolved = scrapbox::bin_support::resolve_output_dir(cfg);
+    let TpqSweepRunOutput::Density {
+        source,
+        dim,
+        n_samples,
+        axis,
+        rows,
+        wall_time_ms,
+        krylov_stats,
+        ..
+    } = &out;
+    eprintln!(
+        "scrapbox tpq sweep: source = {source}, dim = {dim}, samples = {n_samples}, axis = {axis}, points = {pts}, [krylov m: min={min}, max={max}, mean={mean:.1}] (wall {ms} ms) -> {dir}",
+        pts = rows.len(),
+        min = krylov_stats.min_m,
+        max = krylov_stats.max_m,
+        mean = krylov_stats.mean_m,
+        ms = wall_time_ms,
+        dir = resolved.display()
+    );
     Ok(())
 }
