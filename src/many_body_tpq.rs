@@ -183,6 +183,10 @@ pub enum TpqSweepRunOutput {
         source: &'static str,
         dim: usize,
         n_samples: usize,
+        /// Echoed from [tpq].seed for schema parity with the density
+        /// and work_statistics variants. theta_2 evaluators (ed and
+        /// matrix-free) are deterministic given (jw_init, jw_final,
+        /// beta), so this field has no effect on the output rows.
         seed: u64,
         axis: &'static str,
         rows: Vec<TpqSweepBetaTheta2Row>,
@@ -577,7 +581,7 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
         (axis, kind, source) => {
             return Err(ScrapboxError::ConfigValidation {
                 message: format!(
-                    "[tpq.sweep] unsupported combination (axis = {axis:?},                      kind = {kind:?}, source = {source:?}); v0.14 gamma supports                      (beta, density, matrix_free), (beta, density, ed),                      (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free), (seed, density, matrix_free), (beta, theta_2, ed), (beta, theta_2, matrix_free)"
+                    "[tpq.sweep] unsupported combination (axis = {axis:?}, kind = {kind:?}, source = {source:?}); v0.15 alpha supports (beta, density, matrix_free), (beta, density, ed), (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free), (seed, density, matrix_free), (beta, theta_2, ed), (beta, theta_2, matrix_free)"
                 ),
             });
         }
