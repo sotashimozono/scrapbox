@@ -5,7 +5,8 @@
 # Identifiers we use in src/ and notes/ that look like typos but are not.
 mul = 'mul'   # used in mul_add / linear-algebra identifiers
 nd   = 'nd'   # ndarray / nd-matrix prefixes
-BA   = 'BA'   # Bethe-ansatz prefix in e_BA, V_HXC^BALDA
+BA   = 'BA'
+Trickey = 'Trickey' # author surname (Karasiev, Sjostrom, Trickey)
 exatc = 'exatc'  # intentional typo fixture for parse-time rejection tests
 Numer = 'Numer'  # SIAM J. Numer. Anal. journal abbreviation in citations
 
