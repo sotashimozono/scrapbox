@@ -432,3 +432,156 @@ fn tpq_sweep_seed_density_matrix_free_emits_ensemble_summary() {
     }
     std::fs::remove_file(&cfg).ok();
 }
+
+#[test]
+fn tpq_sweep_beta_theta_2_ed_emits_per_beta_rows() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_th2_ed.toml");
+    write_sweep_config_full(
+        &cfg,
+        "th2_ed",
+        "theta_2",
+        "ed",
+        "beta",
+        "[0.5, 1.0, 2.0]",
+        "[quench]\nkind = \"sudden\"\nfinal_external_potential.kind = \"explicit\"\nfinal_external_potential.values = [0.3, -0.3, 0.3, -0.3]\n",
+    );
+    assert!(invoke(&cfg).success(), "theta_2 ed sweep must succeed");
+    let path =
+        std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_th2_ed/tpq_sweep_report.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(json["kind"], "theta_2");
+    assert_eq!(json["source"], "ed");
+    assert_eq!(json["axis"], "beta");
+    let rows = json["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 3);
+    let mut prev_beta = -1.0_f64;
+    for row in rows {
+        let beta = row["beta"].as_f64().unwrap();
+        assert!(beta > prev_beta, "beta order preserved");
+        prev_beta = beta;
+        let th2 = row["theta_2"].as_f64().unwrap();
+        assert!(
+            th2.is_finite() && th2 >= -1e-12,
+            "theta_2 >= 0 finite, got {th2}"
+        );
+    }
+    let stats = json["krylov_stats"].as_object().unwrap();
+    assert_eq!(stats["min_m"].as_u64().unwrap(), 0, "ed path: no Krylov");
+    std::fs::remove_file(&cfg).ok();
+}
+
+#[test]
+fn tpq_sweep_beta_theta_2_matrix_free_matches_ed_path_at_k_dim() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg_mf = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_th2_mf.toml");
+    let extra = "[quench]\nkind = \"sudden\"\nfinal_external_potential.kind = \"explicit\"\nfinal_external_potential.values = [0.3, -0.3, 0.3, -0.3]\n";
+    let body = format!(
+        r#"
+schema_version = "0.2"
+
+[meta]
+name = "tpq_sweep_e2e_th2_mf_kdim"
+description = "v0.15 alpha sweep theta_2 mf cross-check"
+created = "2026-05-25"
+tags = ["v0.15", "tpq", "sweep", "theta_2"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 4
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 2
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.1, -0.2, 0.3, -0.1]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[observables]
+
+{extra}
+
+[tpq]
+kind = "theta_2"
+source = "matrix_free"
+n_samples = 1
+seed = 0
+theta_2_k_states = 36
+krylov_m = 36
+
+[tpq.sweep]
+axis = "beta"
+values = [0.5, 2.0]
+
+[output]
+directory = "runs/tpq_sweep_e2e_th2_mf_kdim"
+format = "json"
+overwrite = true
+"#
+    );
+    std::fs::write(&cfg_mf, body).unwrap();
+    assert!(invoke(&cfg_mf).success());
+    let th_mf: Vec<f64> = {
+        let path = std::path::Path::new(manifest)
+            .join("runs/tpq_sweep_e2e_th2_mf_kdim/tpq_sweep_report.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["theta_2"].as_f64().unwrap())
+            .collect()
+    };
+
+    let cfg_ed = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_th2_xref_ed.toml");
+    write_sweep_config_full(
+        &cfg_ed,
+        "th2_xref_ed",
+        "theta_2",
+        "ed",
+        "beta",
+        "[0.5, 2.0]",
+        extra,
+    );
+    assert!(invoke(&cfg_ed).success());
+    let th_ed: Vec<f64> = {
+        let path = std::path::Path::new(manifest)
+            .join("runs/tpq_sweep_e2e_th2_xref_ed/tpq_sweep_report.json");
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        json["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["theta_2"].as_f64().unwrap())
+            .collect()
+    };
+    assert_eq!(th_mf.len(), th_ed.len());
+    for (a, b) in th_mf.iter().zip(th_ed.iter()) {
+        assert!(
+            (a - b).abs() < 1e-7,
+            "matrix_free k=dim {a} vs ed {b}, delta = {}",
+            (a - b).abs()
+        );
+    }
+    std::fs::remove_file(&cfg_mf).ok();
+    std::fs::remove_file(&cfg_ed).ok();
+}
