@@ -791,6 +791,12 @@ pub enum TpqSweepAxis {
     /// valid with `source = "matrix_free"` (`krylov_tol` has no
     /// effect on the ed path).
     KrylovTol,
+    /// Sweep `[tpq].seed`. Each value (cast to `u64`) overrides
+    /// the base seed and re-runs TPQ. Per-row density rows plus an
+    /// `ensemble_summary` of per-site mean and stderr across seeds.
+    /// v0.14 delta: only valid with `kind = "density"`,
+    /// `source = "matrix_free"`.
+    Seed,
 }
 
 /// `[tpq.sweep]` sub-section: when present, `scrapbox tpq` dispatches
