@@ -205,6 +205,153 @@ pub fn expm_apply_multi_scale<O: LinearOperator>(
     scales.iter().map(|&s| subspace.apply_expm(s)).collect()
 }
 
+/// Block Krylov exponentiation: compute `exp(scale * H) * psi_r`
+/// for every `psi_r` in `psis`, sharing the operator's storage
+/// access between right-hand sides via [`LinearOperator::apply_batch`].
+///
+/// Each `psi_r` builds its own length-`m` Lanczos subspace
+/// independently (the subspaces are not coupled — this is "block"
+/// only in the batched-matvec sense, not in the linear-algebra sense
+/// of a true block Krylov method). For [`crate::spectrum::linear_operator::SparseMatrix`]
+/// this means each CSR row is loaded once per Lanczos step regardless
+/// of `psis.len()`. For implementors with no `apply_batch` override
+/// the inner per-step matvec falls back to the per-RHS default impl,
+/// so correctness is preserved but no perf is gained.
+///
+/// `m` is clamped to `op.dim()`. Zero-norm `psi_r` produces a zero
+/// output vector for that RHS but does not interfere with the other
+/// RHS in the batch.
+///
+/// Returns one length-`op.dim()` vector per `psi_r`, in input order.
+/// Bit-exact with calling [`expm_apply`] per RHS (same Lanczos
+/// re-orthogonalisation order, same Gram-Schmidt pass count).
+#[allow(clippy::too_many_lines)]
+#[must_use]
+pub fn expm_apply_block<O: LinearOperator>(
+    op: &O,
+    psis: &[&[f64]],
+    scale: f64,
+    m: usize,
+) -> Vec<Vec<f64>> {
+    let n = op.dim();
+    let n_rhs = psis.len();
+    if n_rhs == 0 {
+        return Vec::new();
+    }
+    for psi in psis {
+        assert_eq!(psi.len(), n, "psi.len() = {} != op.dim() = {n}", psi.len());
+    }
+    let m = m.min(n).max(1);
+
+    let norms: Vec<f64> = psis
+        .iter()
+        .map(|psi| psi.iter().map(|x| x * x).sum::<f64>().sqrt())
+        .collect();
+    let mut q_prev: Vec<Vec<f64>> = vec![vec![0.0_f64; n]; n_rhs];
+    let mut q_curr: Vec<Vec<f64>> = psis
+        .iter()
+        .enumerate()
+        .map(|(r, psi)| {
+            if norms[r] == 0.0 {
+                vec![0.0_f64; n]
+            } else {
+                psi.iter().map(|x| x / norms[r]).collect()
+            }
+        })
+        .collect();
+    let mut q_vecs: Vec<Vec<Vec<f64>>> = q_curr.iter().map(|q| vec![q.clone()]).collect();
+    let mut alphas: Vec<Vec<f64>> = vec![Vec::with_capacity(m); n_rhs];
+    let mut betas: Vec<Vec<f64>> = vec![Vec::with_capacity(m); n_rhs];
+    let mut beta_prev: Vec<f64> = vec![0.0_f64; n_rhs];
+    let mut active: Vec<bool> = norms.iter().map(|&nm| nm > 0.0).collect();
+
+    let mut ws: Vec<Vec<f64>> = vec![vec![0.0_f64; n]; n_rhs];
+
+    for k in 0..m {
+        let q_refs: Vec<&[f64]> = q_curr.iter().map(Vec::as_slice).collect();
+        op.apply_batch(&q_refs, &mut ws);
+
+        for r in 0..n_rhs {
+            if !active[r] {
+                continue;
+            }
+            let w = &mut ws[r];
+            for i in 0..n {
+                w[i] -= beta_prev[r] * q_prev[r][i];
+            }
+            let alpha_k: f64 = w.iter().zip(q_curr[r].iter()).map(|(a, b)| a * b).sum();
+            for i in 0..n {
+                w[i] -= alpha_k * q_curr[r][i];
+            }
+            for q in &q_vecs[r] {
+                let proj: f64 = w.iter().zip(q.iter()).map(|(a, b)| a * b).sum();
+                for i in 0..n {
+                    w[i] -= proj * q[i];
+                }
+            }
+            let beta_k = w.iter().map(|x| x * x).sum::<f64>().sqrt();
+            alphas[r].push(alpha_k);
+            betas[r].push(beta_k);
+            if beta_k < 1e-14 || k == m - 1 {
+                active[r] = false;
+                continue;
+            }
+            let inv = 1.0 / beta_k;
+            let next_q: Vec<f64> = w.iter().map(|x| x * inv).collect();
+            q_prev[r].clone_from(&q_curr[r]);
+            q_curr[r].clone_from(&next_q);
+            q_vecs[r].push(next_q);
+            beta_prev[r] = beta_k;
+        }
+
+        if active.iter().all(|&a| !a) {
+            break;
+        }
+    }
+
+    let mut out: Vec<Vec<f64>> = Vec::with_capacity(n_rhs);
+    for r in 0..n_rhs {
+        let actual_m = alphas[r].len();
+        if actual_m == 0 || norms[r] == 0.0 {
+            out.push(vec![0.0; n]);
+            continue;
+        }
+        let mut t = Mat::<f64>::zeros(actual_m, actual_m);
+        for k in 0..actual_m {
+            t[(k, k)] = alphas[r][k];
+            if k + 1 < actual_m {
+                t[(k, k + 1)] = betas[r][k];
+                t[(k + 1, k)] = betas[r][k];
+            }
+        }
+        let eigen = t
+            .self_adjoint_eigen(Side::Lower)
+            .expect("Krylov tridiagonal EVD failed");
+        let evals = eigen.S().column_vector();
+        let u_t = eigen.U();
+        let mut c = vec![0.0_f64; actual_m];
+        for k in 0..actual_m {
+            c[k] = (scale * evals[k]).exp() * u_t[(0, k)];
+        }
+        let mut y_m = vec![0.0_f64; actual_m];
+        for i in 0..actual_m {
+            let mut acc = 0.0_f64;
+            for k in 0..actual_m {
+                acc += u_t[(i, k)] * c[k];
+            }
+            y_m[i] = acc;
+        }
+        let mut y = vec![0.0_f64; n];
+        for (i, q) in q_vecs[r].iter().enumerate() {
+            for j in 0..n {
+                y[j] += norms[r] * y_m[i] * q[j];
+            }
+        }
+        out.push(y);
+    }
+    out
+}
+
 /// Adaptive Krylov subspace exponentiation: same contract as
 /// [`expm_apply`] but selects the subspace size `m` on the fly using a
 /// posteriori error estimate (Saad 1992, eq 3.6):
@@ -646,11 +793,104 @@ mod tests {
         let subspace = build_krylov_subspace(&sparse, &[0.0; 3], 5);
         assert!(subspace.norm.abs() < f64::EPSILON);
         assert_eq!(subspace.dim(), 0);
-        // apply_expm on empty subspace must return zero vector of correct length.
         let y = subspace.apply_expm(-1.0);
         assert_eq!(y.len(), 3);
         for &v in &y {
             assert!(v.abs() < f64::EPSILON);
+        }
+    }
+
+    #[test]
+    fn expm_apply_block_matches_per_rhs_expm_apply_on_sparse() {
+        let triples = [
+            (0, 0, 2.0),
+            (1, 1, 3.0),
+            (2, 2, 5.0),
+            (3, 3, 7.0),
+            (4, 4, 11.0),
+            (0, 1, -1.0),
+            (1, 0, -1.0),
+            (1, 2, -0.5),
+            (2, 1, -0.5),
+            (2, 3, -0.3),
+            (3, 2, -0.3),
+            (3, 4, -0.2),
+            (4, 3, -0.2),
+        ];
+        let sparse = SparseMatrix::from_triples(5, &triples);
+        let psis: Vec<Vec<f64>> = vec![
+            vec![1.0, 0.0, 0.0, 0.0, 0.0],
+            vec![0.3, -0.7, 0.5, 0.2, 0.1],
+            vec![0.0, 1.0, -1.0, 1.0, -1.0],
+        ];
+        let psis_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+        let scale = -0.5;
+        let m = 5;
+        let block = expm_apply_block(&sparse, &psis_refs, scale, m);
+        assert_eq!(block.len(), psis.len());
+        for (r, psi) in psis.iter().enumerate() {
+            let single = expm_apply(&sparse, scale, psi, m);
+            for (a, b) in block[r].iter().zip(single.iter()) {
+                assert!(
+                    (a - b).abs() < 1e-12,
+                    "expm_apply_block[{r}] vs expm_apply: {a} vs {b}, delta = {}",
+                    (a - b).abs()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn expm_apply_block_matches_per_rhs_on_dense_default_impl() {
+        let mut h = Mat::<f64>::zeros(3, 3);
+        h[(0, 0)] = 2.0;
+        h[(1, 1)] = 3.0;
+        h[(2, 2)] = 4.0;
+        h[(0, 1)] = -1.0;
+        h[(1, 0)] = -1.0;
+        h[(1, 2)] = -1.0;
+        h[(2, 1)] = -1.0;
+        let psis: Vec<Vec<f64>> = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.5, -0.7, 0.3],
+        ];
+        let psis_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+        let block = expm_apply_block(&h, &psis_refs, -1.0, 3);
+        for (r, psi) in psis.iter().enumerate() {
+            let single = expm_apply(&h, -1.0, psi, 3);
+            for (a, b) in block[r].iter().zip(single.iter()) {
+                assert!(
+                    (a - b).abs() < 1e-12,
+                    "dense block[{r}] vs per-RHS: {a} vs {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn expm_apply_block_empty_batch_returns_empty() {
+        let sparse = SparseMatrix::from_triples(3, &[(0, 0, 1.0)]);
+        let out = expm_apply_block(&sparse, &[], -1.0, 3);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn expm_apply_block_zero_rhs_returns_zero_vector_for_that_slot() {
+        let sparse = SparseMatrix::from_triples(3, &[(0, 0, 1.0), (1, 1, 2.0), (2, 2, 3.0)]);
+        let psi_nonzero = vec![0.5_f64, 0.5, 0.5];
+        let psi_zero = vec![0.0_f64; 3];
+        let refs: Vec<&[f64]> = vec![psi_nonzero.as_slice(), psi_zero.as_slice()];
+        let block = expm_apply_block(&sparse, &refs, -1.0, 3);
+        let single = expm_apply(&sparse, -1.0, &psi_nonzero, 3);
+        for (a, b) in block[0].iter().zip(single.iter()) {
+            assert!((a - b).abs() < 1e-12, "nonzero slot mismatch: {a} vs {b}");
+        }
+        for &v in &block[1] {
+            assert!(
+                v.abs() < 1e-15,
+                "zero slot must produce zero output, got {v}"
+            );
         }
     }
 }
