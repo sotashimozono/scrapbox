@@ -762,6 +762,29 @@ pub enum TpqSource {
     MatrixFree,
 }
 
+/// Axis along which `[tpq.sweep]` walks. v0.13 alpha only supports
+/// `beta` (uses `expm_apply_multi_scale` Krylov subspace reuse).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TpqSweepAxis {
+    /// Sweep `[hamiltonian].beta`. Each value overrides the base.
+    Beta,
+}
+
+/// `[tpq.sweep]` sub-section: when present, `scrapbox tpq` dispatches
+/// to the sweep path and emits `tpq_sweep_report.json` instead of
+/// `tpq_report.json`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TpqSweep {
+    /// Axis to vary. v0.13 alpha: `beta` only.
+    pub axis: TpqSweepAxis,
+    /// Values to evaluate. For `axis = "beta"`, these override
+    /// `[hamiltonian].beta` and `[tpq].beta` (the base beta is
+    /// ignored in sweep mode).
+    pub values: Vec<f64>,
+}
+
 /// `[tpq]` section: TPQ analysis spec.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -794,6 +817,12 @@ pub struct TpqSpec {
     /// default 16. Has no effect for other `kind` / `source` combinations.
     #[serde(default)]
     pub theta_2_k_states: Option<usize>,
+    /// Optional beta sweep spec. When present, `scrapbox tpq`
+    /// dispatches to the sweep path and emits `tpq_sweep_report.json`.
+    /// v0.13 alpha only supports `kind = "density"`, `source =
+    /// "matrix_free"`, `axis = "beta"`.
+    #[serde(default)]
+    pub sweep: Option<TpqSweep>,
 }
 
 #[cfg(test)]
