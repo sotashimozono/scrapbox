@@ -35,6 +35,29 @@ pub trait LinearOperator {
     /// zero, and callers must not rely on the operator adding into
     /// `y` (i.e. there is no `+=` semantics).
     fn apply(&self, x: &[f64], y: &mut [f64]);
+
+    /// Compute `ys[i] = self * xs[i]` for every `i in 0..xs.len()`.
+    ///
+    /// Default impl delegates to [`Self::apply`] per right-hand side.
+    /// Implementors with cache-friendly batch layouts (e.g. CSR
+    /// matrices) may override to iterate over the operator's storage
+    /// once and accumulate into all `ys` in the inner loop, which is
+    /// often substantially faster than `N` independent `apply` calls.
+    ///
+    /// `xs.len()` must equal `ys.len()`, and every `xs[i].len()` and
+    /// `ys[i].len()` must equal `self.dim()`.
+    fn apply_batch(&self, xs: &[&[f64]], ys: &mut [Vec<f64>]) {
+        assert_eq!(
+            xs.len(),
+            ys.len(),
+            "apply_batch: xs.len() = {} != ys.len() = {}",
+            xs.len(),
+            ys.len()
+        );
+        for (x, y) in xs.iter().zip(ys.iter_mut()) {
+            self.apply(x, y);
+        }
+    }
 }
 
 impl LinearOperator for Mat<f64> {
@@ -284,6 +307,59 @@ impl LinearOperator for SparseMatrix {
             y[i] = acc;
         }
     }
+
+    /// CSR batch matvec: walks every row once and accumulates into
+    /// all output vectors in the inner col-index loop.
+    ///
+    /// The non-zero pattern (`row_starts`, `col_indices`, `values`)
+    /// is loaded into cache once per row regardless of the batch
+    /// size, so this is typically much faster than `N` per-RHS
+    /// [`Self::apply`] calls for non-trivial sparsity.
+    fn apply_batch(&self, xs: &[&[f64]], ys: &mut [Vec<f64>]) {
+        assert_eq!(
+            xs.len(),
+            ys.len(),
+            "apply_batch: xs.len() = {} != ys.len() = {}",
+            xs.len(),
+            ys.len()
+        );
+        let n_rhs = xs.len();
+        for x in xs {
+            assert_eq!(
+                x.len(),
+                self.dim,
+                "apply_batch: x.len() = {} != dim {}",
+                x.len(),
+                self.dim
+            );
+        }
+        for y in ys.iter() {
+            assert_eq!(
+                y.len(),
+                self.dim,
+                "apply_batch: y.len() = {} != dim {}",
+                y.len(),
+                self.dim
+            );
+        }
+        for y in ys.iter_mut() {
+            for v in y.iter_mut() {
+                *v = 0.0;
+            }
+        }
+        for i in 0..self.dim {
+            let start = self.row_starts[i];
+            let end = self.row_starts[i + 1];
+            for r in 0..n_rhs {
+                let mut acc = 0.0_f64;
+                let x = xs[r];
+                for k in start..end {
+                    acc = self.values[k].mul_add(x[self.col_indices[k]], acc);
+                }
+                ys[r][i] = acc;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -354,5 +430,82 @@ mod tests {
         let s = SparseMatrix::from_triples(10, &[]);
         assert_eq!(s.dim(), 10);
         assert_eq!(s.nnz(), 0);
+    }
+
+    #[test]
+    fn apply_batch_default_impl_matches_per_rhs_apply_on_dense() {
+        let mut h = Mat::<f64>::zeros(3, 3);
+        h[(0, 0)] = 2.0;
+        h[(1, 1)] = 3.0;
+        h[(2, 2)] = 5.0;
+        h[(0, 1)] = -1.0;
+        h[(1, 0)] = -1.0;
+        h[(1, 2)] = -1.0;
+        h[(2, 1)] = -1.0;
+        let xs: Vec<Vec<f64>> = vec![
+            vec![1.0, 0.0, 0.0],
+            vec![0.0, 1.0, 0.0],
+            vec![0.5, -0.7, 0.3],
+        ];
+        let xs_refs: Vec<&[f64]> = xs.iter().map(Vec::as_slice).collect();
+        let mut ys_batch: Vec<Vec<f64>> = vec![vec![0.0; 3]; 3];
+        h.apply_batch(&xs_refs, &mut ys_batch);
+        for (i, x) in xs.iter().enumerate() {
+            let mut y_single = vec![0.0; 3];
+            h.apply(x, &mut y_single);
+            for (a, b) in ys_batch[i].iter().zip(y_single.iter()) {
+                assert!(
+                    (a - b).abs() < 1e-15,
+                    "dense apply_batch[{i}] vs apply: {a} vs {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn apply_batch_csr_override_matches_per_rhs_apply_on_sparse() {
+        let triples = [
+            (0, 0, 2.0),
+            (1, 1, 3.0),
+            (2, 2, 5.0),
+            (3, 3, 7.0),
+            (4, 4, 11.0),
+            (0, 1, -1.0),
+            (1, 0, -1.0),
+            (1, 2, -0.5),
+            (2, 1, -0.5),
+            (2, 3, -0.3),
+            (3, 2, -0.3),
+            (3, 4, -0.2),
+            (4, 3, -0.2),
+        ];
+        let sparse = SparseMatrix::from_triples(5, &triples);
+        let xs: Vec<Vec<f64>> = vec![
+            vec![1.0, 0.0, 0.0, 0.0, 0.0],
+            vec![0.3, -0.7, 0.5, 0.2, 0.1],
+            vec![0.0, 1.0, -1.0, 1.0, -1.0],
+        ];
+        let xs_refs: Vec<&[f64]> = xs.iter().map(Vec::as_slice).collect();
+        let mut ys_batch: Vec<Vec<f64>> = vec![vec![0.0; 5]; 3];
+        sparse.apply_batch(&xs_refs, &mut ys_batch);
+        for (i, x) in xs.iter().enumerate() {
+            let mut y_single = vec![0.0; 5];
+            sparse.apply(x, &mut y_single);
+            for (a, b) in ys_batch[i].iter().zip(y_single.iter()) {
+                assert!(
+                    (a - b).abs() < 1e-15,
+                    "sparse apply_batch[{i}] vs apply: {a} vs {b}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn apply_batch_empty_batch_does_nothing() {
+        let sparse = SparseMatrix::from_triples(3, &[(0, 0, 1.0)]);
+        let xs: Vec<&[f64]> = Vec::new();
+        let mut ys: Vec<Vec<f64>> = Vec::new();
+        sparse.apply_batch(&xs, &mut ys);
+        assert!(ys.is_empty());
     }
 }
