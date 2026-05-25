@@ -372,6 +372,89 @@ pub(crate) fn apply_hamiltonian(psi: &[f64], ed: &EdResult) -> Vec<f64> {
     out
 }
 
+/// Adaptive-Lanczos variant of [`exact_theta_2_matrix_free`].
+///
+/// Replaces the fixed-`m` Lanczos diagonalisation of `h_init` with
+/// [`crate::spectrum::lanczos::diagonalize_adaptive`], which grows the
+/// Krylov subspace until the top `k_states` Ritz residuals fall below
+/// `lanczos_tol`, capped at `max_m`. Returns the same
+/// `(theta_2, effective_m)` contract as the fixed-`m` variant.
+#[must_use]
+pub fn exact_theta_2_matrix_free_adaptive<O1, O2>(
+    h_init: &O1,
+    h_final: &O2,
+    beta: f64,
+    k_states: usize,
+    lanczos_tol: f64,
+    max_m: usize,
+) -> (f64, usize)
+where
+    O1: crate::spectrum::linear_operator::LinearOperator,
+    O2: crate::spectrum::linear_operator::LinearOperator,
+{
+    let dim = h_init.dim();
+    assert_eq!(
+        dim,
+        h_final.dim(),
+        "exact_theta_2_matrix_free_adaptive: h_init and h_final must share dim (got {} vs {})",
+        dim,
+        h_final.dim()
+    );
+    assert!(
+        k_states > 0,
+        "exact_theta_2_matrix_free_adaptive: k_states must be >= 1"
+    );
+    let k_states = k_states.min(dim);
+    let max_m = max_m.max(k_states).min(dim);
+
+    let (eigen, effective_m) =
+        crate::spectrum::lanczos::diagonalize_adaptive(h_init, k_states, lanczos_tol, max_m)
+            .expect("exact_theta_2_matrix_free_adaptive: Lanczos diagonalisation failed");
+    let evals = &eigen.eigenvalues;
+    let evecs = &eigen.eigenvectors;
+    let k_used = k_states.min(evals.len());
+    let shift = evals[..k_used]
+        .iter()
+        .copied()
+        .fold(f64::INFINITY, f64::min);
+
+    let mut z = 0.0_f64;
+    let mut sum_w_nn = 0.0_f64;
+    let mut sum_w_nn_sq = 0.0_f64;
+    let mut sum_full_w_sq_n = 0.0_f64;
+
+    let mut psi_n = vec![0.0_f64; dim];
+    let mut h_final_psi = vec![0.0_f64; dim];
+    for n in 0..k_used {
+        let weight = (-beta * (evals[n] - shift)).exp();
+        z += weight;
+        for j in 0..dim {
+            psi_n[j] = evecs[(j, n)];
+        }
+        h_final.apply(&psi_n, &mut h_final_psi);
+        let mut delta = vec![0.0_f64; dim];
+        for j in 0..dim {
+            delta[j] = h_final_psi[j] - evals[n] * psi_n[j];
+        }
+        let w_nn: f64 = psi_n.iter().zip(delta.iter()).map(|(p, d)| p * d).sum();
+        let full_w_sq_n: f64 = delta.iter().map(|d| d * d).sum();
+        sum_w_nn += weight * w_nn;
+        sum_w_nn_sq += weight * w_nn * w_nn;
+        sum_full_w_sq_n += weight * full_w_sq_n;
+    }
+
+    assert!(
+        z.is_finite() && z > 0.0,
+        "exact_theta_2_matrix_free_adaptive: truncated partition function collapsed (Z = {z}, beta = {beta}, k_states = {k_states})"
+    );
+    let mean_w = sum_w_nn / z;
+    let mean_w_sq = sum_full_w_sq_n / z;
+    let mean_w_nn_sq = sum_w_nn_sq / z;
+    let sigma_w_sq = mean_w_sq - mean_w * mean_w;
+    let sigma_w_sq_diag = mean_w_nn_sq - mean_w * mean_w;
+    (sigma_w_sq - sigma_w_sq_diag, effective_m)
+}
+
 /// Matrix-free Palamara 2024 III.3 exact `Theta_2` via Lanczos low-`k`
 /// eigenstate truncation. Mirrors [`exact_theta_2`] (which consumes
 /// `EdResult`s) but only computes the leading `k_states` eigenpairs of

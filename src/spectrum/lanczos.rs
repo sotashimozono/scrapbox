@@ -184,6 +184,162 @@ fn axpy(y: &mut [f64], a: f64, x: &[f64]) {
     }
 }
 
+/// Run Lanczos adaptively: grow the Krylov subspace until the top
+/// `k_target` Ritz residuals fall below `tol`, capped at `max_m`.
+///
+/// Ritz residual for the `j`-th sorted Ritz pair after `k+1` steps is
+/// `|beta_{k+1} * u_{k+1}[k, j]|`, where `u_{k+1}` is the eigenvector
+/// matrix of the tridiagonal `T_{k+1}`. The adaptive loop stops at
+/// the first `k+1 >= k_target` for which the maximum residual over
+/// the `k_target` lowest eigenvalues is below `tol`. If the bound is
+/// never reached, returns at `m = max_m` (with the last Ritz pairs).
+///
+/// Compared to a fixed-`m` [`diagonalize`] this lets the caller pay
+/// only for the matvecs actually needed to resolve the requested low
+/// spectrum to a chosen tolerance. Used by the matrix-free `theta_2`
+/// path in [`crate::reference::ed::exact_theta_2_matrix_free`] when
+/// `[tpq].lanczos_tol` is set in the config.
+///
+/// Returns `(Eigendecomposition, m_used)` matching the contract of
+/// [`diagonalize_with_effective_m`].
+#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+pub fn diagonalize_adaptive<O: super::linear_operator::LinearOperator>(
+    matrix: &O,
+    k_target: usize,
+    tol: f64,
+    max_m: usize,
+) -> Result<(Eigendecomposition, usize)> {
+    let n = matrix.dim();
+    assert!(k_target >= 1, "k_target must be >= 1");
+    assert!(tol > 0.0, "tol must be positive");
+    let k_target = k_target.min(n);
+    let max_m = max_m.min(n).max(k_target);
+
+    let mut v_prev = vec![0.0_f64; n];
+    let mut v_curr = vec![0.0_f64; n];
+    for (i, x) in v_curr.iter_mut().enumerate() {
+        *x = ((i as f64) * 0.137).sin().mul_add(1.0e-3, 1.0);
+    }
+    let norm = vec_norm(&v_curr);
+    for x in &mut v_curr {
+        *x /= norm;
+    }
+
+    let mut q_basis: Vec<Vec<f64>> = Vec::with_capacity(max_m);
+    q_basis.push(v_curr.clone());
+    let mut alpha: Vec<f64> = Vec::with_capacity(max_m);
+    let mut beta: Vec<f64> = Vec::with_capacity(max_m);
+    let mut beta_prev = 0.0_f64;
+    let mut effective_m = max_m;
+
+    for k in 0..max_m {
+        let mut w = vec![0.0_f64; n];
+        matrix.apply(&v_curr, &mut w);
+        if k > 0 {
+            axpy(&mut w, -beta_prev, &v_prev);
+        }
+        let a_k = dot(&v_curr, &w);
+        alpha.push(a_k);
+        axpy(&mut w, -a_k, &v_curr);
+
+        for _pass in 0..2 {
+            for q in &q_basis {
+                let c = dot(q, &w);
+                axpy(&mut w, -c, q);
+            }
+        }
+
+        let b_k = vec_norm(&w);
+        beta.push(b_k);
+        let dim_t = k + 1;
+
+        if dim_t >= k_target {
+            let mut t = Mat::<f64>::zeros(dim_t, dim_t);
+            for j in 0..dim_t {
+                t[(j, j)] = alpha[j];
+                if j + 1 < dim_t {
+                    t[(j, j + 1)] = beta[j];
+                    t[(j + 1, j)] = beta[j];
+                }
+            }
+            let eigen = t
+                .self_adjoint_eigen(Side::Lower)
+                .expect("self-adjoint EVD of T_m failed");
+            let s_col = eigen.S().column_vector();
+            let mut indexed: Vec<(usize, f64)> = (0..dim_t).map(|j| (j, s_col[j])).collect();
+            indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("Ritz values must be finite"));
+            let u_t = eigen.U();
+            let last_row = dim_t - 1;
+            let mut max_resid = 0.0_f64;
+            for (orig_idx, _) in indexed.iter().take(k_target) {
+                let r = (b_k * u_t[(last_row, *orig_idx)]).abs();
+                if r > max_resid {
+                    max_resid = r;
+                }
+            }
+            if max_resid < tol {
+                effective_m = dim_t;
+                break;
+            }
+        }
+
+        if k + 1 == max_m {
+            break;
+        }
+        if b_k < 1e-14 {
+            effective_m = dim_t;
+            break;
+        }
+
+        let inv = 1.0 / b_k;
+        for x in &mut w {
+            *x *= inv;
+        }
+        v_prev.clone_from(&v_curr);
+        v_curr = w;
+        q_basis.push(v_curr.clone());
+        beta_prev = b_k;
+    }
+
+    let mut t = Mat::<f64>::zeros(effective_m, effective_m);
+    for k in 0..effective_m {
+        t[(k, k)] = alpha[k];
+        if k + 1 < effective_m {
+            let off = beta[k];
+            t[(k, k + 1)] = off;
+            t[(k + 1, k)] = off;
+        }
+    }
+    let eigen = t
+        .self_adjoint_eigen(Side::Lower)
+        .expect("self-adjoint EVD failed");
+    let s_col = eigen.S().column_vector();
+    let mut indexed: Vec<(usize, f64)> = (0..effective_m).map(|k| (k, s_col[k])).collect();
+    indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).expect("Ritz values must be finite"));
+
+    let u_t = eigen.U();
+    let mut eigenvalues = Vec::with_capacity(effective_m);
+    let mut eigenvectors = Mat::<f64>::zeros(n, effective_m);
+    for (new_idx, (orig_idx, value)) in indexed.into_iter().enumerate() {
+        eigenvalues.push(value);
+        for i in 0..n {
+            let mut acc = 0.0;
+            for j in 0..effective_m {
+                acc = u_t[(j, orig_idx)].mul_add(q_basis[j][i], acc);
+            }
+            eigenvectors[(i, new_idx)] = acc;
+        }
+    }
+
+    Ok((
+        Eigendecomposition {
+            eigenvalues,
+            eigenvectors,
+        },
+        effective_m,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::linear_operator::SparseMatrix;

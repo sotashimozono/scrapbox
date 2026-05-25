@@ -400,8 +400,13 @@ fn run_theta_2_mf(
         .max(k_states)
         .min(dim);
     let start = Instant::now();
-    let (theta_2, effective_m) =
-        ed::exact_theta_2_matrix_free(&jw_init, &jw_final, beta, k_states, krylov_m);
+    let (theta_2, effective_m) = tpq_cfg.theta_2_lanczos_tol.map_or_else(
+        || ed::exact_theta_2_matrix_free(&jw_init, &jw_final, beta, k_states, krylov_m),
+        |tol| {
+            let max_m = tpq_cfg.krylov_m.unwrap_or(80).max(k_states).min(dim);
+            ed::exact_theta_2_matrix_free_adaptive(&jw_init, &jw_final, beta, k_states, tol, max_m)
+        },
+    );
     let elapsed = start.elapsed().as_millis();
     let krylov_stats = KrylovStatsJson {
         min_m: effective_m,
