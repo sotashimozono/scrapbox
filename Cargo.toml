@@ -14,7 +14,7 @@ publish = false
 # Linear algebra — `faer` is the project's primary matrix library
 # (see discipline/canonical_thermal_dft.md Sec VII for the seed Rust code).
 faer = { version = "0.24", features = ["rayon"] }
-ndarray = { version = "0.15", features = ["serde"] }
+ndarray = { version = "0.17", features = ["serde"] }
 
 # Parallelism — used inside `faer` and (future) sweep mode.
 rayon = "1.10"
