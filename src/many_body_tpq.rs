@@ -126,6 +126,34 @@ pub struct TpqSweepCartesianDensityRow {
     pub density: Vec<f64>,
 }
 
+/// One row of a seed-sweep work-statistics result (v0.15 gamma).
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqSweepSeedWorkRow {
+    /// RNG seed this row was evaluated at.
+    pub seed: u64,
+    /// Per-row TPQ mean work at this seed.
+    pub mean_w: f64,
+    /// Per-row TPQ work variance at this seed.
+    pub work_variance: f64,
+    /// Standard error of `mean_w` across the TPQ samples WITHIN this
+    /// seed run (intra-seed). For inter-seed dispersion see the
+    /// `ensemble_summary` block.
+    pub mean_w_stderr: f64,
+}
+
+/// Scalar ensemble summary of work statistics across the seed sweep
+/// (v0.15 gamma): mean of per-seed `mean_w` plus its stderr across
+/// seeds.
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqWorkEnsembleSummary {
+    /// Mean of per-seed `mean_w` across the seed list.
+    pub mean_w_mean: f64,
+    /// Standard error of `mean_w_mean` across seeds (inter-seed
+    /// dispersion of the within-seed mean estimate). Uses sample
+    /// stddev with N-1 denominator; zero for single-seed runs.
+    pub mean_w_stderr_across_seeds: f64,
+}
+
 /// One row of a beta-sweep theta_2 result (v0.15 alpha).
 #[derive(Debug, Clone, Serialize)]
 pub struct TpqSweepBetaTheta2Row {
@@ -189,6 +217,17 @@ pub enum TpqSweepRunOutput {
         seed: u64,
         axis: &'static str,
         rows: Vec<TpqSweepBetaWorkRow>,
+        wall_time_ms: u128,
+        krylov_stats: KrylovStatsJson,
+    },
+    /// Seed-sweep work-statistics rows + ensemble summary (v0.15 gamma).
+    WorkStatisticsSeedSweep {
+        source: &'static str,
+        dim: usize,
+        n_samples: usize,
+        axis: &'static str,
+        rows: Vec<TpqSweepSeedWorkRow>,
+        ensemble_summary: TpqWorkEnsembleSummary,
         wall_time_ms: u128,
         krylov_stats: KrylovStatsJson,
     },
@@ -669,10 +708,13 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
         (crate::config::TpqSweepAxis::Beta, TpqKind::Theta2, TpqSource::MatrixFree) => {
             run_sweep_beta_theta_2_mf(cfg, tpq_cfg, sweep_cfg)?
         }
+        (crate::config::TpqSweepAxis::Seed, TpqKind::WorkStatistics, TpqSource::MatrixFree) => {
+            run_sweep_seed_work_mf(cfg, tpq_cfg, sweep_cfg)?
+        }
         (axis, kind, source) => {
             return Err(ScrapboxError::ConfigValidation {
                 message: format!(
-                    "[tpq.sweep] unsupported combination (axis = {axis:?}, kind = {kind:?}, source = {source:?}); v0.15 alpha supports (beta, density, matrix_free), (beta, density, ed), (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free), (seed, density, matrix_free), (beta, theta_2, ed), (beta, theta_2, matrix_free)"
+                    "[tpq.sweep] unsupported combination (axis = {axis:?}, kind = {kind:?}, source = {source:?}); v0.15 alpha supports (beta, density, matrix_free), (beta, density, ed), (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free), (seed, density, matrix_free), (beta, theta_2, ed), (beta, theta_2, matrix_free), (seed, work_statistics, matrix_free)"
                 ),
             });
         }
@@ -1194,6 +1236,102 @@ fn run_sweep_cartesian_beta_seed_density_mf(
         wall_time_ms: elapsed,
         krylov_stats: KrylovStatsJson::from(agg_stats),
     }
+}
+
+fn run_sweep_seed_work_mf(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> Result<TpqSweepRunOutput> {
+    use crate::spectrum::linear_operator::LinearOperator;
+    let v_init = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let v_final = resolve_v_final(cfg)?;
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let jw_init = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_init,
+    );
+    let jw_final = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_final,
+    );
+    let dim = jw_init.dim();
+    let spec = krylov_spec_from(tpq_cfg);
+    let beta = tpq_cfg.beta.unwrap_or(cfg.hamiltonian.beta);
+    let start = Instant::now();
+    let mut rows_payload: Vec<TpqSweepSeedWorkRow> = Vec::with_capacity(sweep_cfg.values.len());
+    let mut m_log: Vec<usize> = Vec::new();
+    for &seed_f in &sweep_cfg.values {
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let seed = seed_f as u64;
+        let (stats, krylov_stats) = tpq::tpq_work_statistics_matrix_free(
+            &jw_init,
+            &jw_final,
+            beta,
+            tpq_cfg.n_samples,
+            seed,
+            spec,
+        );
+        m_log.push(krylov_stats.min_m);
+        m_log.push(krylov_stats.max_m);
+        rows_payload.push(TpqSweepSeedWorkRow {
+            seed,
+            mean_w: stats.mean_w,
+            work_variance: stats.work_variance,
+            mean_w_stderr: stats.mean_w_stderr,
+        });
+    }
+    let elapsed = start.elapsed().as_millis();
+    let agg_stats = KrylovStats::from_samples(&m_log);
+
+    let n_seeds = rows_payload.len();
+    #[allow(clippy::cast_precision_loss)]
+    let n_f = n_seeds as f64;
+    let mean_w_mean = if n_seeds > 0 {
+        rows_payload.iter().map(|r| r.mean_w).sum::<f64>() / n_f
+    } else {
+        0.0
+    };
+    let variance = rows_payload
+        .iter()
+        .map(|r| {
+            let d = r.mean_w - mean_w_mean;
+            d * d
+        })
+        .sum::<f64>();
+    let mean_w_stderr_across_seeds = if n_seeds > 1 {
+        #[allow(clippy::cast_precision_loss)]
+        let nm1 = (n_seeds - 1) as f64;
+        (variance / (nm1 * n_f)).sqrt()
+    } else {
+        0.0
+    };
+
+    Ok(TpqSweepRunOutput::WorkStatisticsSeedSweep {
+        source: "matrix_free",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        axis: "seed",
+        rows: rows_payload,
+        ensemble_summary: TpqWorkEnsembleSummary {
+            mean_w_mean,
+            mean_w_stderr_across_seeds,
+        },
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson::from(agg_stats),
+    })
 }
 
 fn write_sweep_output_json(path: &Path, out: &TpqSweepRunOutput) -> Result<()> {

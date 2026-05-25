@@ -734,3 +734,50 @@ fn tpq_sweep_cartesian_rejects_same_axis() {
     );
     std::fs::remove_file(&cfg).ok();
 }
+
+#[test]
+fn tpq_sweep_seed_work_statistics_matrix_free_emits_ensemble_summary() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_seed_work.toml");
+    write_sweep_config_full(
+        &cfg,
+        "seed_work",
+        "work_statistics",
+        "matrix_free",
+        "seed",
+        "[7, 19, 42, 101]",
+        "[quench]\nkind = \"sudden\"\nfinal_external_potential.kind = \"explicit\"\nfinal_external_potential.values = [0.3, -0.3, 0.3, -0.3]\n",
+    );
+    assert!(
+        invoke(&cfg).success(),
+        "(seed, work_statistics) sweep must succeed"
+    );
+    let path =
+        std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_seed_work/tpq_sweep_report.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(json["kind"], "work_statistics_seed_sweep");
+    assert_eq!(json["axis"], "seed");
+    let rows = json["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 4);
+    let seeds: Vec<u64> = rows.iter().map(|r| r["seed"].as_u64().unwrap()).collect();
+    assert_eq!(seeds, vec![7, 19, 42, 101]);
+    for row in rows {
+        assert!(row["mean_w"].as_f64().is_some(), "mean_w present per row");
+        let var = row["work_variance"].as_f64().unwrap();
+        assert!(var >= 0.0, "intra-seed variance >= 0");
+        let intra = row["mean_w_stderr"].as_f64().unwrap();
+        assert!(intra >= 0.0, "intra-seed stderr >= 0");
+    }
+    let summary = json["ensemble_summary"]
+        .as_object()
+        .expect("ensemble_summary");
+    let mean_w_mean = summary["mean_w_mean"].as_f64().unwrap();
+    let inter = summary["mean_w_stderr_across_seeds"].as_f64().unwrap();
+    assert!(mean_w_mean.is_finite(), "mean_w_mean finite");
+    assert!(
+        inter > 0.0,
+        "inter-seed stderr must be > 0 across 4 different seeds, got {inter}"
+    );
+    std::fs::remove_file(&cfg).ok();
+}
