@@ -295,6 +295,24 @@ fn tpq_sweep_subcommand(cfg: &Config) -> Result<()> {
             ms = wall_time_ms,
             dir = resolved.display()
         ),
+        TpqSweepRunOutput::WorkStatisticsSeedSweep {
+            source,
+            dim,
+            n_samples,
+            axis,
+            rows,
+            wall_time_ms,
+            krylov_stats,
+            ..
+        } => eprintln!(
+            "scrapbox tpq sweep: kind = work_statistics (ensemble), source = {source}, dim = {dim}, samples = {n_samples}, axis = {axis}, points = {pts}, [krylov m: min={min}, max={max}, mean={mean:.1}] (wall {ms} ms) -> {dir}",
+            pts = rows.len(),
+            min = krylov_stats.min_m,
+            max = krylov_stats.max_m,
+            mean = krylov_stats.mean_m,
+            ms = wall_time_ms,
+            dir = resolved.display()
+        ),
         TpqSweepRunOutput::CartesianDensity {
             source,
             dim,
