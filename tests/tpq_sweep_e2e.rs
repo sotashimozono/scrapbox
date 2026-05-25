@@ -585,3 +585,152 @@ overwrite = true
     std::fs::remove_file(&cfg_mf).ok();
     std::fs::remove_file(&cfg_ed).ok();
 }
+
+fn write_cartesian_sweep_config(
+    path: &std::path::Path,
+    tag: &str,
+    primary_axis: &str,
+    primary_values: &str,
+    secondary_axis: &str,
+    secondary_values: &str,
+) {
+    let body = format!(
+        r#"
+schema_version = "0.2"
+
+[meta]
+name = "tpq_sweep_e2e_{tag}"
+description = "v0.15 beta cartesian sweep e2e"
+created = "2026-05-25"
+tags = ["v0.15", "tpq", "sweep", "cartesian"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 4
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 2
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.1, -0.2, 0.3, -0.1]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 1
+tolerance = 1.0
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[observables]
+
+[tpq]
+kind = "density"
+source = "matrix_free"
+n_samples = 20
+seed = 7
+krylov_m = 30
+
+[tpq.sweep]
+axis = "{primary_axis}"
+values = {primary_values}
+second_axis = "{secondary_axis}"
+second_values = {secondary_values}
+
+[output]
+directory = "runs/tpq_sweep_e2e_{tag}"
+format = "json"
+overwrite = true
+"#
+    );
+    std::fs::write(path, body).expect("write cartesian config");
+}
+
+#[test]
+fn tpq_sweep_cartesian_beta_seed_density_mf_emits_full_grid() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_cart_bs.toml");
+    write_cartesian_sweep_config(&cfg, "cart_bs", "beta", "[0.5, 2.0]", "seed", "[7, 19, 42]");
+    assert!(invoke(&cfg).success(), "cartesian sweep must succeed");
+    let path =
+        std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_cart_bs/tpq_sweep_report.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(json["kind"], "cartesian_density");
+    assert_eq!(json["axis_primary"], "beta");
+    assert_eq!(json["axis_secondary"], "seed");
+    let rows = json["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 6, "2 betas x 3 seeds = 6 cells");
+    for (i, row) in rows.iter().enumerate() {
+        let beta = row["value_primary"].as_f64().unwrap();
+        let seed = row["value_secondary"].as_f64().unwrap();
+        let expected_beta = if i < 3 { 0.5 } else { 2.0 };
+        assert!(
+            (beta - expected_beta).abs() < 1e-12,
+            "row {i}: expected primary beta {expected_beta}, got {beta}"
+        );
+        let expected_seed_idx = i % 3;
+        let expected_seed = [7.0_f64, 19.0, 42.0][expected_seed_idx];
+        assert!(
+            (seed - expected_seed).abs() < 1e-12,
+            "row {i}: expected secondary seed {expected_seed}, got {seed}"
+        );
+        let density = row["density"].as_array().unwrap();
+        assert_eq!(density.len(), 4);
+        let total: f64 = density.iter().map(|v| v.as_f64().unwrap()).sum();
+        assert!((total - 4.0).abs() < 1e-6, "row {i}: total {total} ~ 4");
+    }
+    std::fs::remove_file(&cfg).ok();
+}
+
+#[test]
+fn tpq_sweep_cartesian_seed_beta_swaps_loop_order() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_cart_sb.toml");
+    write_cartesian_sweep_config(
+        &cfg,
+        "cart_sb",
+        "seed",
+        "[7, 19]",
+        "beta",
+        "[0.5, 2.0, 4.0]",
+    );
+    assert!(invoke(&cfg).success(), "cartesian swap sweep must succeed");
+    let path =
+        std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_cart_sb/tpq_sweep_report.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(json["axis_primary"], "seed");
+    assert_eq!(json["axis_secondary"], "beta");
+    let rows = json["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 6, "2 seeds x 3 betas = 6 cells");
+    let first_seed = rows[0]["value_primary"].as_f64().unwrap();
+    let first_beta = rows[0]["value_secondary"].as_f64().unwrap();
+    assert!((first_seed - 7.0).abs() < 1e-12, "first primary = seed=7");
+    assert!(
+        (first_beta - 0.5).abs() < 1e-12,
+        "first secondary = beta=0.5"
+    );
+    std::fs::remove_file(&cfg).ok();
+}
+
+#[test]
+fn tpq_sweep_cartesian_rejects_same_axis() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_cart_dup.toml");
+    write_cartesian_sweep_config(&cfg, "cart_dup", "beta", "[0.5, 2.0]", "beta", "[1.0, 3.0]");
+    assert!(
+        !invoke(&cfg).success(),
+        "cartesian axes equal -> ConfigValidation, must fail"
+    );
+    std::fs::remove_file(&cfg).ok();
+}

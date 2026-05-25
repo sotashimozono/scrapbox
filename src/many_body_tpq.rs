@@ -111,6 +111,21 @@ pub struct TpqSweepBetaWorkRow {
     pub mean_w_stderr: f64,
 }
 
+/// One row of a 2-axis cartesian density sweep (v0.15 beta).
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqSweepCartesianDensityRow {
+    /// Primary-axis label (matches `axis` at the top of the output).
+    pub axis_primary: &'static str,
+    /// Primary-axis value at this cell.
+    pub value_primary: f64,
+    /// Secondary-axis label.
+    pub axis_secondary: &'static str,
+    /// Secondary-axis value at this cell.
+    pub value_secondary: f64,
+    /// Per-site canonical thermal density at this cell.
+    pub density: Vec<f64>,
+}
+
 /// One row of a beta-sweep theta_2 result (v0.15 alpha).
 #[derive(Debug, Clone, Serialize)]
 pub struct TpqSweepBetaTheta2Row {
@@ -174,6 +189,17 @@ pub enum TpqSweepRunOutput {
         seed: u64,
         axis: &'static str,
         rows: Vec<TpqSweepBetaWorkRow>,
+        wall_time_ms: u128,
+        krylov_stats: KrylovStatsJson,
+    },
+    /// 2-axis cartesian density sweep (v0.15 beta).
+    CartesianDensity {
+        source: &'static str,
+        dim: usize,
+        n_samples: usize,
+        axis_primary: &'static str,
+        axis_secondary: &'static str,
+        rows: Vec<TpqSweepCartesianDensityRow>,
         wall_time_ms: u128,
         krylov_stats: KrylovStatsJson,
     },
@@ -537,6 +563,7 @@ fn run_theta_2_mf(
 ///   adaptive Lanczos.
 ///
 /// Any other combination returns [`ScrapboxError::ConfigValidation`].
+#[allow(clippy::too_many_lines)]
 pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
     let tpq_cfg = cfg
         .tpq
@@ -554,6 +581,70 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
         return Err(ScrapboxError::ConfigValidation {
             message: "[tpq.sweep].values must be non-empty".into(),
         });
+    }
+
+    if sweep_cfg.second_axis.is_some() || sweep_cfg.second_values.is_some() {
+        let secondary_axis =
+            sweep_cfg
+                .second_axis
+                .ok_or_else(|| ScrapboxError::ConfigValidation {
+                    message: "[tpq.sweep].second_axis required when second_values is set".into(),
+                })?;
+        let secondary_values =
+            sweep_cfg
+                .second_values
+                .as_ref()
+                .ok_or_else(|| ScrapboxError::ConfigValidation {
+                    message: "[tpq.sweep].second_values required when second_axis is set".into(),
+                })?;
+        if secondary_values.is_empty() {
+            return Err(ScrapboxError::ConfigValidation {
+                message: "[tpq.sweep].second_values must be non-empty".into(),
+            });
+        }
+        if sweep_cfg.axis == secondary_axis {
+            return Err(ScrapboxError::ConfigValidation {
+                message: format!(
+                    "[tpq.sweep] cartesian axes must differ: axis = second_axis = {:?}",
+                    sweep_cfg.axis
+                ),
+            });
+        }
+        let out = match (sweep_cfg.axis, secondary_axis, tpq_cfg.kind, tpq_cfg.source) {
+            (
+                crate::config::TpqSweepAxis::Beta,
+                crate::config::TpqSweepAxis::Seed,
+                TpqKind::Density,
+                TpqSource::MatrixFree,
+            )
+            | (
+                crate::config::TpqSweepAxis::Seed,
+                crate::config::TpqSweepAxis::Beta,
+                TpqKind::Density,
+                TpqSource::MatrixFree,
+            ) => run_sweep_cartesian_beta_seed_density_mf(
+                cfg,
+                tpq_cfg,
+                sweep_cfg,
+                secondary_axis,
+                secondary_values,
+            ),
+            (axis, second_axis, kind, source) => {
+                return Err(ScrapboxError::ConfigValidation {
+                    message: format!(
+                        "[tpq.sweep] cartesian (axis = {axis:?}, second_axis = {second_axis:?},                          kind = {kind:?}, source = {source:?}) unsupported; v0.15 beta supports                          only (beta, seed) and (seed, beta) cartesian for density + matrix_free"
+                    ),
+                });
+            }
+        };
+        let out_dir = crate::bin_support::resolve_output_dir(cfg);
+        std::fs::create_dir_all(&out_dir).map_err(|source| ScrapboxError::Artifact {
+            path: out_dir.clone(),
+            message: format!("failed to create output dir: {source}"),
+        })?;
+        let out_path = out_dir.join("tpq_sweep_report.json");
+        write_sweep_output_json(&out_path, &out)?;
+        return Ok(out);
     }
 
     let out = match (sweep_cfg.axis, tpq_cfg.kind, tpq_cfg.source) {
@@ -1004,6 +1095,105 @@ fn run_sweep_beta_theta_2_mf(
         wall_time_ms: elapsed,
         krylov_stats: KrylovStatsJson::from(agg_stats),
     })
+}
+
+fn run_sweep_cartesian_beta_seed_density_mf(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+    secondary_axis: crate::config::TpqSweepAxis,
+    secondary_values: &[f64],
+) -> TpqSweepRunOutput {
+    use crate::spectrum::linear_operator::LinearOperator;
+    let v_ext = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let jw = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_ext,
+    );
+    let dim = jw.dim();
+    let spec = krylov_spec_from(tpq_cfg);
+
+    let (betas_owned, seeds_owned, primary_is_beta): (Vec<f64>, Vec<u64>, bool) =
+        if matches!(sweep_cfg.axis, crate::config::TpqSweepAxis::Beta) {
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let seeds: Vec<u64> = secondary_values.iter().map(|&v| v as u64).collect();
+            (sweep_cfg.values.clone(), seeds, true)
+        } else {
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let seeds: Vec<u64> = sweep_cfg.values.iter().map(|&v| v as u64).collect();
+            (secondary_values.to_vec(), seeds, false)
+        };
+    let _ = secondary_axis;
+
+    let (axis_primary, axis_secondary): (&'static str, &'static str) = if primary_is_beta {
+        ("beta", "seed")
+    } else {
+        ("seed", "beta")
+    };
+
+    let start = Instant::now();
+    let mut rows_payload: Vec<TpqSweepCartesianDensityRow> =
+        Vec::with_capacity(betas_owned.len() * seeds_owned.len());
+    let mut m_log: Vec<usize> = Vec::new();
+    if primary_is_beta {
+        for &beta in &betas_owned {
+            for &seed in &seeds_owned {
+                let (density, krylov_stats) =
+                    tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, seed, spec);
+                m_log.push(krylov_stats.min_m);
+                m_log.push(krylov_stats.max_m);
+                #[allow(clippy::cast_precision_loss)]
+                let seed_f = seed as f64;
+                rows_payload.push(TpqSweepCartesianDensityRow {
+                    axis_primary,
+                    value_primary: beta,
+                    axis_secondary,
+                    value_secondary: seed_f,
+                    density,
+                });
+            }
+        }
+    } else {
+        for &seed in &seeds_owned {
+            for &beta in &betas_owned {
+                let (density, krylov_stats) =
+                    tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, seed, spec);
+                m_log.push(krylov_stats.min_m);
+                m_log.push(krylov_stats.max_m);
+                #[allow(clippy::cast_precision_loss)]
+                let seed_f = seed as f64;
+                rows_payload.push(TpqSweepCartesianDensityRow {
+                    axis_primary,
+                    value_primary: seed_f,
+                    axis_secondary,
+                    value_secondary: beta,
+                    density,
+                });
+            }
+        }
+    }
+    let elapsed = start.elapsed().as_millis();
+    let agg_stats = KrylovStats::from_samples(&m_log);
+
+    TpqSweepRunOutput::CartesianDensity {
+        source: "matrix_free",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        axis_primary,
+        axis_secondary,
+        rows: rows_payload,
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson::from(agg_stats),
+    }
 }
 
 fn write_sweep_output_json(path: &Path, out: &TpqSweepRunOutput) -> Result<()> {
