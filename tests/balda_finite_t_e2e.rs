@@ -114,7 +114,12 @@ fn balda_finite_t_route_runs_and_converges() {
 }
 
 #[test]
-fn balda_finite_t_matches_zero_t_balda_at_same_beta_in_v013_placeholder() {
+fn balda_finite_t_differs_from_t0_balda_at_finite_beta_in_v014() {
+    // v0.14 alpha: BaldaFiniteT now applies a leading-T^2 additive
+    // correction. At beta = 2.0, U = 4.0 the correction is ~5e-3
+    // per site at half-filling, so the SCF density should differ
+    // from plain BALDA by something larger than 1e-5 but still
+    // small (< 1e-2) to keep the route variationally close.
     let manifest = env!("CARGO_MANIFEST_DIR");
     let beta = 2.0_f64;
 
@@ -128,10 +133,45 @@ fn balda_finite_t_matches_zero_t_balda_at_same_beta_in_v013_placeholder() {
     assert!(invoke_run(&cfg_t0).success());
     let d_t0 = read_density("balda_finite_t_e2e_xref_t0");
 
+    let max_delta = d_ft
+        .iter()
+        .zip(d_t0.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        max_delta > 1e-5,
+        "v0.14 alpha: balda_finite_t SCF density must show T-correction vs plain balda, max delta {max_delta}"
+    );
+    assert!(
+        max_delta < 1e-2,
+        "v0.14 alpha: T-correction must remain small for SCF variational stability, max delta {max_delta}"
+    );
+    std::fs::remove_file(&cfg_ft).ok();
+    std::fs::remove_file(&cfg_t0).ok();
+}
+
+#[test]
+fn balda_finite_t_large_beta_recovers_t0_balda_within_scf_tolerance() {
+    // v0.14 alpha: at beta = 1e3 the T^2 correction is ~5e-9 per
+    // site, well below the 1e-8 SCF residual tolerance. The two
+    // SCFs should converge to densities matching at < 1e-6.
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let beta = 1.0e3_f64;
+
+    let cfg_ft = std::path::Path::new(manifest).join("configs/_test_balda_ft_cold_ft.toml");
+    write_config(&cfg_ft, "cold_ft", "balda_finite_t", beta);
+    assert!(invoke_run(&cfg_ft).success());
+    let d_ft = read_density("balda_finite_t_e2e_cold_ft");
+
+    let cfg_t0 = std::path::Path::new(manifest).join("configs/_test_balda_ft_cold_t0.toml");
+    write_config(&cfg_t0, "cold_t0", "balda", beta);
+    assert!(invoke_run(&cfg_t0).success());
+    let d_t0 = read_density("balda_finite_t_e2e_cold_t0");
+
     for (a, b) in d_ft.iter().zip(d_t0.iter()) {
         assert!(
             (a - b).abs() < 1e-6,
-            "v0.13 beta placeholder: balda_finite_t vs balda densities differ: {a} vs {b}, delta = {}",
+            "v0.14 alpha low-T limit: balda_finite_t vs balda density {a} vs {b}, delta = {}",
             (a - b).abs()
         );
     }
