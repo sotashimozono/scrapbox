@@ -77,7 +77,7 @@ pub enum TpqRunOutput {
     },
 }
 
-/// One row of a `[tpq.sweep] axis = "beta"` sweep result.
+/// One row of a beta-sweep density result.
 #[derive(Debug, Clone, Serialize)]
 pub struct TpqSweepBetaRow {
     /// Inverse temperature this row was evaluated at.
@@ -86,12 +86,37 @@ pub struct TpqSweepBetaRow {
     pub density: Vec<f64>,
 }
 
+/// One row of a krylov_tol-sweep density result (v0.14 gamma).
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqSweepKrylovTolRow {
+    /// Adaptive-Krylov tolerance this row was evaluated at.
+    pub krylov_tol: f64,
+    /// Per-site canonical thermal density at this tol.
+    pub density: Vec<f64>,
+    /// Per-row Krylov diagnostics (varies between rows: tighter tol
+    /// drives larger `effective_m`).
+    pub krylov_stats: KrylovStatsJson,
+}
+
+/// One row of a beta-sweep work-statistics result (v0.14 gamma).
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqSweepBetaWorkRow {
+    /// Inverse temperature this row was evaluated at.
+    pub beta: f64,
+    /// Per-row TPQ mean work.
+    pub mean_w: f64,
+    /// Per-row TPQ work variance.
+    pub work_variance: f64,
+    /// Standard error of `mean_w` across TPQ samples.
+    pub mean_w_stderr: f64,
+}
+
 /// Output payload emitted by `scrapbox tpq` when `[tpq.sweep]` is set.
 /// Written to `tpq_sweep_report.json` instead of `tpq_report.json`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TpqSweepRunOutput {
-    /// Density rows over a beta sweep (matrix-free only in v0.13 alpha).
+    /// Beta-sweep density rows (axis = "beta").
     Density {
         source: &'static str,
         dim: usize,
@@ -99,6 +124,27 @@ pub enum TpqSweepRunOutput {
         seed: u64,
         axis: &'static str,
         rows: Vec<TpqSweepBetaRow>,
+        wall_time_ms: u128,
+        krylov_stats: KrylovStatsJson,
+    },
+    /// Krylov-tol-sweep density rows (v0.14 gamma).
+    DensityKrylovTol {
+        source: &'static str,
+        dim: usize,
+        n_samples: usize,
+        seed: u64,
+        axis: &'static str,
+        rows: Vec<TpqSweepKrylovTolRow>,
+        wall_time_ms: u128,
+    },
+    /// Beta-sweep work-statistics rows (v0.14 gamma).
+    WorkStatistics {
+        source: &'static str,
+        dim: usize,
+        n_samples: usize,
+        seed: u64,
+        axis: &'static str,
+        rows: Vec<TpqSweepBetaWorkRow>,
         wall_time_ms: u128,
         krylov_stats: KrylovStatsJson,
     },
@@ -424,10 +470,17 @@ fn run_theta_2_mf(
     })
 }
 
-/// Dispatch a `[tpq.sweep]` run. v0.13 alpha supports only the
-/// combination `axis = "beta"`, `kind = "density"`, `source =
-/// "matrix_free"`; any other combination returns
-/// [`ScrapboxError::ConfigValidation`].
+/// Dispatch a `[tpq.sweep]` run.
+///
+/// v0.14 gamma supported `(axis, kind, source)` combinations:
+///
+/// - `(beta, density, matrix_free)` — v0.13 alpha; subspace reuse.
+/// - `(beta, density, ed)` — v0.14 gamma; per-beta ED dispatch.
+/// - `(beta, work_statistics, matrix_free)` — v0.14 gamma.
+/// - `(krylov_tol, density, matrix_free)` — v0.14 gamma; per-tol
+///   adaptive Lanczos.
+///
+/// Any other combination returns [`ScrapboxError::ConfigValidation`].
 pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
     let tpq_cfg = cfg
         .tpq
@@ -446,22 +499,45 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
             message: "[tpq.sweep].values must be non-empty".into(),
         });
     }
-    if !matches!(sweep_cfg.axis, crate::config::TpqSweepAxis::Beta) {
-        return Err(ScrapboxError::ConfigValidation {
-            message: "v0.13 alpha only supports [tpq.sweep].axis = \"beta\"".into(),
-        });
-    }
-    if !matches!(tpq_cfg.kind, TpqKind::Density) {
-        return Err(ScrapboxError::ConfigValidation {
-            message: "v0.13 alpha [tpq.sweep] only supports [tpq].kind = \"density\"".into(),
-        });
-    }
-    if !matches!(tpq_cfg.source, TpqSource::MatrixFree) {
-        return Err(ScrapboxError::ConfigValidation {
-            message: "v0.13 alpha [tpq.sweep] only supports [tpq].source = \"matrix_free\"".into(),
-        });
-    }
 
+    let out = match (sweep_cfg.axis, tpq_cfg.kind, tpq_cfg.source) {
+        (crate::config::TpqSweepAxis::Beta, TpqKind::Density, TpqSource::MatrixFree) => {
+            run_sweep_beta_density_mf(cfg, tpq_cfg, sweep_cfg)
+        }
+        (crate::config::TpqSweepAxis::Beta, TpqKind::Density, TpqSource::Ed) => {
+            run_sweep_beta_density_ed(cfg, tpq_cfg, sweep_cfg)
+        }
+        (crate::config::TpqSweepAxis::Beta, TpqKind::WorkStatistics, TpqSource::MatrixFree) => {
+            run_sweep_beta_work_mf(cfg, tpq_cfg, sweep_cfg)?
+        }
+        (crate::config::TpqSweepAxis::KrylovTol, TpqKind::Density, TpqSource::MatrixFree) => {
+            run_sweep_krylov_tol_density_mf(cfg, tpq_cfg, sweep_cfg)
+        }
+        (axis, kind, source) => {
+            return Err(ScrapboxError::ConfigValidation {
+                message: format!(
+                    "[tpq.sweep] unsupported combination (axis = {axis:?},                      kind = {kind:?}, source = {source:?}); v0.14 gamma supports                      (beta, density, matrix_free), (beta, density, ed),                      (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free)"
+                ),
+            });
+        }
+    };
+
+    let out_dir = crate::bin_support::resolve_output_dir(cfg);
+    std::fs::create_dir_all(&out_dir).map_err(|source| ScrapboxError::Artifact {
+        path: out_dir.clone(),
+        message: format!("failed to create output dir: {source}"),
+    })?;
+    let out_path = out_dir.join("tpq_sweep_report.json");
+    write_sweep_output_json(&out_path, &out)?;
+    Ok(out)
+}
+
+fn run_sweep_beta_density_mf(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> TpqSweepRunOutput {
+    use crate::spectrum::linear_operator::LinearOperator;
     let v_ext = cfg
         .hamiltonian
         .external_potential
@@ -488,7 +564,7 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
         .zip(rows)
         .map(|(&beta, density)| TpqSweepBetaRow { beta, density })
         .collect();
-    let out = TpqSweepRunOutput::Density {
+    TpqSweepRunOutput::Density {
         source: "matrix_free",
         dim,
         n_samples: tpq_cfg.n_samples,
@@ -497,15 +573,168 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
         rows: rows_payload,
         wall_time_ms: elapsed,
         krylov_stats: KrylovStatsJson::from(krylov_stats),
-    };
-    let out_dir = crate::bin_support::resolve_output_dir(cfg);
-    std::fs::create_dir_all(&out_dir).map_err(|source| ScrapboxError::Artifact {
-        path: out_dir.clone(),
-        message: format!("failed to create output dir: {source}"),
-    })?;
-    let out_path = out_dir.join("tpq_sweep_report.json");
-    write_sweep_output_json(&out_path, &out)?;
-    Ok(out)
+    }
+}
+
+fn run_sweep_beta_density_ed(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> TpqSweepRunOutput {
+    let v_ext = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let betas: Vec<f64> = sweep_cfg.values.clone();
+    let start = Instant::now();
+    let mut rows_payload: Vec<TpqSweepBetaRow> = Vec::with_capacity(betas.len());
+    let mut dim = 0_usize;
+    for &beta in &betas {
+        let ed_result = ed::canonical_thermal(
+            cfg.hamiltonian.num_sites,
+            n_up,
+            n_dn,
+            cfg.hamiltonian.hopping_j,
+            cfg.hamiltonian.on_site_interaction,
+            &v_ext,
+        );
+        dim = ed_result.eigenvalues.len();
+        let density = tpq::tpq_density(&ed_result, beta, tpq_cfg.n_samples, tpq_cfg.seed);
+        rows_payload.push(TpqSweepBetaRow { beta, density });
+    }
+    let elapsed = start.elapsed().as_millis();
+    TpqSweepRunOutput::Density {
+        source: "ed",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        seed: tpq_cfg.seed,
+        axis: "beta",
+        rows: rows_payload,
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson {
+            min_m: 0,
+            max_m: 0,
+            mean_m: 0.0,
+        },
+    }
+}
+
+fn run_sweep_beta_work_mf(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> Result<TpqSweepRunOutput> {
+    use crate::spectrum::linear_operator::LinearOperator;
+    let v_init = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let v_final = resolve_v_final(cfg)?;
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let jw_init = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_init,
+    );
+    let jw_final = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_final,
+    );
+    let dim = jw_init.dim();
+    let spec = krylov_spec_from(tpq_cfg);
+    let betas: Vec<f64> = sweep_cfg.values.clone();
+    let start = Instant::now();
+    let mut rows_payload: Vec<TpqSweepBetaWorkRow> = Vec::with_capacity(betas.len());
+    let mut m_log: Vec<usize> = Vec::new();
+    for &beta in &betas {
+        let (stats, krylov_stats) = tpq::tpq_work_statistics_matrix_free(
+            &jw_init,
+            &jw_final,
+            beta,
+            tpq_cfg.n_samples,
+            tpq_cfg.seed,
+            spec,
+        );
+        m_log.push(krylov_stats.min_m);
+        m_log.push(krylov_stats.max_m);
+        rows_payload.push(TpqSweepBetaWorkRow {
+            beta,
+            mean_w: stats.mean_w,
+            work_variance: stats.work_variance,
+            mean_w_stderr: stats.mean_w_stderr,
+        });
+    }
+    let elapsed = start.elapsed().as_millis();
+    let agg_stats = KrylovStats::from_samples(&m_log);
+    Ok(TpqSweepRunOutput::WorkStatistics {
+        source: "matrix_free",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        seed: tpq_cfg.seed,
+        axis: "beta",
+        rows: rows_payload,
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson::from(agg_stats),
+    })
+}
+
+fn run_sweep_krylov_tol_density_mf(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> TpqSweepRunOutput {
+    use crate::spectrum::krylov::KrylovSpec;
+    use crate::spectrum::linear_operator::LinearOperator;
+    let v_ext = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let jw = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_ext,
+    );
+    let dim = jw.dim();
+    let beta = tpq_cfg.beta.unwrap_or(cfg.hamiltonian.beta);
+    let max_m = tpq_cfg.krylov_m.unwrap_or(60).min(dim);
+    let tols: Vec<f64> = sweep_cfg.values.clone();
+    let start = Instant::now();
+    let mut rows_payload: Vec<TpqSweepKrylovTolRow> = Vec::with_capacity(tols.len());
+    for &tol in &tols {
+        let spec = KrylovSpec::Adaptive { tol, max_m };
+        let (density, krylov_stats) =
+            tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, tpq_cfg.seed, spec);
+        rows_payload.push(TpqSweepKrylovTolRow {
+            krylov_tol: tol,
+            density,
+            krylov_stats: KrylovStatsJson::from(krylov_stats),
+        });
+    }
+    let elapsed = start.elapsed().as_millis();
+    TpqSweepRunOutput::DensityKrylovTol {
+        source: "matrix_free",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        seed: tpq_cfg.seed,
+        axis: "krylov_tol",
+        rows: rows_payload,
+        wall_time_ms: elapsed,
+    }
 }
 
 fn write_sweep_output_json(path: &Path, out: &TpqSweepRunOutput) -> Result<()> {
