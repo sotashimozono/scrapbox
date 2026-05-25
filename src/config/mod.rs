@@ -805,12 +805,24 @@ pub enum TpqSweepAxis {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TpqSweep {
-    /// Axis to vary. v0.13 alpha: `beta` only.
+    /// Primary axis to vary. v0.13 alpha: `beta` only; v0.14 gamma
+    /// added `krylov_tol`; v0.14 delta added `seed`.
     pub axis: TpqSweepAxis,
-    /// Values to evaluate. For `axis = "beta"`, these override
-    /// `[hamiltonian].beta` and `[tpq].beta` (the base beta is
-    /// ignored in sweep mode).
+    /// Primary-axis values to evaluate. For `axis = "beta"`, these
+    /// override `[hamiltonian].beta` (the base beta is ignored in
+    /// sweep mode). For `axis = "seed"`, these are cast to `u64`.
     pub values: Vec<f64>,
+    /// Optional secondary axis (v0.15 beta). When set, the sweep
+    /// renders a cartesian grid: one row per (primary, secondary)
+    /// pair. v0.15 beta only supports `(density, matrix_free)` with
+    /// primary in `{beta, seed}` and secondary in `{beta, seed}`,
+    /// primary != secondary.
+    #[serde(default)]
+    pub second_axis: Option<TpqSweepAxis>,
+    /// Secondary-axis values. Must be `Some(_)` whenever
+    /// `second_axis` is `Some(_)`; otherwise `ConfigValidation`.
+    #[serde(default)]
+    pub second_values: Option<Vec<f64>>,
 }
 
 /// `[tpq]` section: TPQ analysis spec.

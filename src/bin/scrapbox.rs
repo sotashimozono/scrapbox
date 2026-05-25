@@ -239,6 +239,7 @@ fn tpq_subcommand(config_path: &str) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 fn tpq_sweep_subcommand(cfg: &Config) -> Result<()> {
     use scrapbox::many_body_tpq::TpqSweepRunOutput;
     let out = scrapbox::many_body_tpq::run_sweep(cfg)?;
@@ -288,6 +289,27 @@ fn tpq_sweep_subcommand(cfg: &Config) -> Result<()> {
         } => eprintln!(
             "scrapbox tpq sweep: kind = work_statistics, source = {source}, dim = {dim}, samples = {n_samples}, axis = {axis}, points = {pts}, [krylov m: min={min}, max={max}, mean={mean:.1}] (wall {ms} ms) -> {dir}",
             pts = rows.len(),
+            min = krylov_stats.min_m,
+            max = krylov_stats.max_m,
+            mean = krylov_stats.mean_m,
+            ms = wall_time_ms,
+            dir = resolved.display()
+        ),
+        TpqSweepRunOutput::CartesianDensity {
+            source,
+            dim,
+            n_samples,
+            axis_primary,
+            axis_secondary,
+            rows,
+            wall_time_ms,
+            krylov_stats,
+            ..
+        } => eprintln!(
+            "scrapbox tpq sweep: kind = density (cartesian), source = {source}, dim = {dim}, samples = {n_samples}, axes = ({ap}, {as_}), cells = {cells}, [krylov m: min={min}, max={max}, mean={mean:.1}] (wall {ms} ms) -> {dir}",
+            ap = axis_primary,
+            as_ = axis_secondary,
+            cells = rows.len(),
             min = krylov_stats.min_m,
             max = krylov_stats.max_m,
             mean = krylov_stats.mean_m,
