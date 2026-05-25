@@ -243,24 +243,57 @@ fn tpq_sweep_subcommand(cfg: &Config) -> Result<()> {
     use scrapbox::many_body_tpq::TpqSweepRunOutput;
     let out = scrapbox::many_body_tpq::run_sweep(cfg)?;
     let resolved = scrapbox::bin_support::resolve_output_dir(cfg);
-    let TpqSweepRunOutput::Density {
-        source,
-        dim,
-        n_samples,
-        axis,
-        rows,
-        wall_time_ms,
-        krylov_stats,
-        ..
-    } = &out;
-    eprintln!(
-        "scrapbox tpq sweep: source = {source}, dim = {dim}, samples = {n_samples}, axis = {axis}, points = {pts}, [krylov m: min={min}, max={max}, mean={mean:.1}] (wall {ms} ms) -> {dir}",
-        pts = rows.len(),
-        min = krylov_stats.min_m,
-        max = krylov_stats.max_m,
-        mean = krylov_stats.mean_m,
-        ms = wall_time_ms,
-        dir = resolved.display()
-    );
+    match &out {
+        TpqSweepRunOutput::Density {
+            source,
+            dim,
+            n_samples,
+            axis,
+            rows,
+            wall_time_ms,
+            krylov_stats,
+            ..
+        } => eprintln!(
+            "scrapbox tpq sweep: source = {source}, dim = {dim}, samples = {n_samples}, axis = {axis}, points = {pts}, [krylov m: min={min}, max={max}, mean={mean:.1}] (wall {ms} ms) -> {dir}",
+            pts = rows.len(),
+            min = krylov_stats.min_m,
+            max = krylov_stats.max_m,
+            mean = krylov_stats.mean_m,
+            ms = wall_time_ms,
+            dir = resolved.display()
+        ),
+        TpqSweepRunOutput::DensityKrylovTol {
+            source,
+            dim,
+            n_samples,
+            axis,
+            rows,
+            wall_time_ms,
+            ..
+        } => eprintln!(
+            "scrapbox tpq sweep: source = {source}, dim = {dim}, samples = {n_samples}, axis = {axis}, points = {pts} (wall {ms} ms) -> {dir}",
+            pts = rows.len(),
+            ms = wall_time_ms,
+            dir = resolved.display()
+        ),
+        TpqSweepRunOutput::WorkStatistics {
+            source,
+            dim,
+            n_samples,
+            axis,
+            rows,
+            wall_time_ms,
+            krylov_stats,
+            ..
+        } => eprintln!(
+            "scrapbox tpq sweep: kind = work_statistics, source = {source}, dim = {dim}, samples = {n_samples}, axis = {axis}, points = {pts}, [krylov m: min={min}, max={max}, mean={mean:.1}] (wall {ms} ms) -> {dir}",
+            pts = rows.len(),
+            min = krylov_stats.min_m,
+            max = krylov_stats.max_m,
+            mean = krylov_stats.mean_m,
+            ms = wall_time_ms,
+            dir = resolved.display()
+        ),
+    }
     Ok(())
 }

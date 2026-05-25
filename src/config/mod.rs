@@ -772,13 +772,25 @@ pub enum TpqSource {
     MatrixFree,
 }
 
-/// Axis along which `[tpq.sweep]` walks. v0.13 alpha only supports
-/// `beta` (uses `expm_apply_multi_scale` Krylov subspace reuse).
+/// Axis along which `[tpq.sweep]` walks.
+///
+/// v0.14 gamma supported combinations (`axis` x `kind` x `source`):
+///
+/// - `beta` x `density` x `matrix_free` (v0.13 alpha; subspace reuse)
+/// - `beta` x `density` x `ed` (v0.14 gamma)
+/// - `beta` x `work_statistics` x `matrix_free` (v0.14 gamma)
+/// - `krylov_tol` x `density` x `matrix_free` (v0.14 gamma)
+///
+/// Other combinations return [`crate::error::ScrapboxError::ConfigValidation`].
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TpqSweepAxis {
     /// Sweep `[hamiltonian].beta`. Each value overrides the base.
     Beta,
+    /// Sweep `[tpq].krylov_tol`. Each value overrides the base; only
+    /// valid with `source = "matrix_free"` (`krylov_tol` has no
+    /// effect on the ed path).
+    KrylovTol,
 }
 
 /// `[tpq.sweep]` sub-section: when present, `scrapbox tpq` dispatches
