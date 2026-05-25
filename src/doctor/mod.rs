@@ -141,6 +141,7 @@ fn xc_kind_name(xc: &ExchangeCorrelation) -> &'static str {
     match xc {
         ExchangeCorrelation::HubbardLda(_) => "hubbard_lda",
         ExchangeCorrelation::Balda(_) => "balda",
+        ExchangeCorrelation::BaldaFiniteT(_) => "balda_finite_t",
         ExchangeCorrelation::NonInteracting => "non_interacting",
     }
 }
