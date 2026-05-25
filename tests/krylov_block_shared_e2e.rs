@@ -2,7 +2,10 @@
     clippy::doc_markdown,
     clippy::suboptimal_flops,
     clippy::cast_precision_loss,
-    clippy::many_single_char_names
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::redundant_clone,
+    clippy::useless_vec
 )]
 //! Integration tests for `expm_apply_block_shared` (v0.15 epsilon)
 //! exercising the real `JwHubbard` matrix-free Hamiltonian rather
@@ -207,4 +210,177 @@ fn expm_apply_block_shared_handles_high_beta_tpq_scale() {
         err < 1e-8,
         "shared block at TPQ-realistic scale -2: max delta {err}"
     );
+}
+
+#[test]
+fn expm_apply_block_shared_n_equals_5_well_covered_block() {
+    // N=5 with m=10 on n=36 gives big=50 > 36, comfortably covered.
+    let (jw, dense) = build_l4_hubbard();
+    let n = jw.dim();
+    let psis: Vec<Vec<f64>> = (0..5).map(|r| make_unit_psi(n, r + 71)).collect();
+    let psi_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+    let scale = -0.4_f64;
+    let shared = expm_apply_block_shared(&jw, &psi_refs, scale, 10);
+    let want = dense_expm_apply(&dense, scale, &psis);
+    let err = max_abs_diff(&shared, &want);
+    assert!(err < 1e-8, "N=5 shared block vs dense: max delta {err}");
+}
+
+#[test]
+fn expm_apply_block_shared_handles_identical_rhs_rank_one_block() {
+    // Three identical RHSs form a rank-1 initial block. block_qr must
+    // deflate the duplicate columns cleanly; the three outputs must
+    // remain identical and match the single-RHS reference.
+    let (jw, dense) = build_l4_hubbard();
+    let n = jw.dim();
+    let psi = make_unit_psi(n, 101);
+    let psis = vec![psi.clone(), psi.clone(), psi.clone()];
+    let psi_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+    let scale = -0.5_f64;
+    let shared = expm_apply_block_shared(&jw, &psi_refs, scale, 24);
+    let want = dense_expm_apply(&dense, scale, &psis);
+    let err = max_abs_diff(&shared, &want);
+    assert!(err < 1e-7, "rank-1 RHS block vs dense ref: max delta {err}");
+    for r in 1..3 {
+        for i in 0..n {
+            let d = (shared[r][i] - shared[0][i]).abs();
+            assert!(
+                d < 1e-10,
+                "outputs of identical RHSs diverged: r={r} i={i} delta {d}"
+            );
+        }
+    }
+}
+
+#[test]
+fn expm_apply_block_shared_zero_rhs_in_batch_yields_zero_output_for_that_slot() {
+    let (jw, dense) = build_l4_hubbard();
+    let n = jw.dim();
+    let psi_nonzero = make_unit_psi(n, 113);
+    let psi_zero = vec![0.0_f64; n];
+    let psis = vec![psi_nonzero.clone(), psi_zero];
+    let psi_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+    let scale = -0.5_f64;
+    let shared = expm_apply_block_shared(&jw, &psi_refs, scale, 20);
+    for (i, &v) in shared[1].iter().enumerate() {
+        assert!(v.abs() < 1e-11, "zero RHS slot r=1 i={i}: {v}");
+    }
+    let want = dense_expm_apply(&dense, scale, &vec![psi_nonzero]);
+    for (i, (&a, &b)) in shared[0].iter().zip(want[0].iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-8,
+            "nonzero RHS slot r=0 i={i}: {a} vs dense {b}"
+        );
+    }
+}
+
+#[test]
+fn expm_apply_block_shared_m_overflow_clamps_safely() {
+    // Asking for m far beyond n/n_rhs must clamp without panic and
+    // still return the correct answer (full subspace coverage).
+    let (jw, dense) = build_l4_hubbard();
+    let n = jw.dim();
+    let psi = make_unit_psi(n, 127);
+    let psis = vec![psi];
+    let psi_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+    let scale = -0.5_f64;
+    let shared = expm_apply_block_shared(&jw, &psi_refs, scale, 10_000);
+    let want = dense_expm_apply(&dense, scale, &psis);
+    let err = max_abs_diff(&shared, &want);
+    assert!(err < 1e-9, "m overflow clamped: err {err}");
+}
+
+#[test]
+fn expm_apply_block_shared_m_equals_one_is_finite_and_aligned_with_psi() {
+    // m=1 with N=1 gives the diagonal approximation exp(scale * <psi|H|psi>) * psi.
+    // It is not guaranteed to beat the zeroth-order "just return psi" guess for
+    // arbitrary psi (the mean-energy exponential can sit on the wrong side of the
+    // true value), but it must (a) not panic, (b) return a finite vector, and
+    // (c) remain collinear with psi (single subspace direction).
+    let (jw, _) = build_l4_hubbard();
+    let n = jw.dim();
+    let psi = make_unit_psi(n, 137);
+    let psis = vec![psi.clone()];
+    let psi_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+    let scale = -0.2_f64;
+    let m1 = expm_apply_block_shared(&jw, &psi_refs, scale, 1);
+    assert_eq!(m1.len(), 1);
+    assert_eq!(m1[0].len(), n);
+    for &v in &m1[0] {
+        assert!(v.is_finite(), "m=1 output must be finite: got {v}");
+    }
+    // Colinearity: m1[0] = alpha * psi for some scalar alpha (since the
+    // 1-dim Krylov subspace is span{psi}). Compute alpha as the inner
+    // product and verify the residual is essentially zero.
+    let alpha: f64 = m1[0].iter().zip(psi.iter()).map(|(a, b)| a * b).sum();
+    let residual: f64 = m1[0]
+        .iter()
+        .zip(psi.iter())
+        .map(|(a, b)| (a - alpha * b).powi(2))
+        .sum::<f64>()
+        .sqrt();
+    assert!(
+        residual < 1e-10,
+        "m=1 output must be collinear with psi, residual {residual}"
+    );
+}
+
+#[test]
+fn expm_apply_block_shared_on_l6_hubbard_matches_per_rhs() {
+    // L=6 half-filled spinful: dim = C(6,3)^2 = 400. Larger than L=4
+    // and representative of the smallest non-trivial production sector.
+    #[allow(clippy::cast_precision_loss)]
+    let v: Vec<f64> = (0..6_usize).map(|i| 0.1_f64 * (i as f64 - 2.5)).collect();
+    let jw = JwHubbard::new(6, 3, 3, 1.0, 4.0, &v);
+    let n = jw.dim();
+    assert_eq!(n, 400, "L=6 spinful half-filled sector has dim 400");
+    let psis: Vec<Vec<f64>> = (0..2).map(|r| make_unit_psi(n, r + 173)).collect();
+    let psi_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+    let scale = -0.3_f64;
+    let per_rhs = expm_apply_block(&jw, &psi_refs, scale, 80);
+    let shared = expm_apply_block_shared(&jw, &psi_refs, scale, 40);
+    let err = max_abs_diff(&per_rhs, &shared);
+    assert!(
+        err < 1e-6,
+        "L=6 per-RHS (m=80) vs shared (m=40 N=2, big=80): max delta {err}"
+    );
+}
+
+#[test]
+fn expm_apply_block_shared_invariant_to_basis_rotation_of_rhs() {
+    // exp(scale*H) is a linear map, so if M' = M Q for some N x N
+    // orthogonal Q, then exp(scale*H) M' = (exp(scale*H) M) Q.
+    // The shared block routine should respect this linearity.
+    let (jw, _) = build_l4_hubbard();
+    let n = jw.dim();
+    let psi_a = make_unit_psi(n, 191);
+    let psi_b = make_unit_psi(n, 197);
+    let theta = 0.7_f64;
+    let c = theta.cos();
+    let s = theta.sin();
+    let psi_a_rot: Vec<f64> = psi_a
+        .iter()
+        .zip(psi_b.iter())
+        .map(|(a, b)| c * a - s * b)
+        .collect();
+    let psi_b_rot: Vec<f64> = psi_a
+        .iter()
+        .zip(psi_b.iter())
+        .map(|(a, b)| s * a + c * b)
+        .collect();
+    let scale = -0.4_f64;
+    let m = 18;
+    let direct = expm_apply_block_shared(&jw, &[psi_a.as_slice(), psi_b.as_slice()], scale, m);
+    let rotated =
+        expm_apply_block_shared(&jw, &[psi_a_rot.as_slice(), psi_b_rot.as_slice()], scale, m);
+    for i in 0..n {
+        let lhs_a = c * direct[0][i] - s * direct[1][i];
+        let lhs_b = s * direct[0][i] + c * direct[1][i];
+        let d_a = (lhs_a - rotated[0][i]).abs();
+        let d_b = (lhs_b - rotated[1][i]).abs();
+        assert!(
+            d_a < 1e-8 && d_b < 1e-8,
+            "basis-rotation linearity i={i}: |Δa|={d_a}, |Δb|={d_b}"
+        );
+    }
 }
