@@ -181,6 +181,9 @@ mod tests {
         let ft = BaldaFiniteT::new(4.0, 2.0, BaldaParams::default());
         assert!(ft.t2_correction(0.0).abs() < 1e-15);
         let full = ft.t2_correction(2.0).abs();
-        assert!(full > 1e-4, "n=2 full-band correction must be nonzero: {full}");
+        assert!(
+            full > 1e-4,
+            "n=2 full-band correction must be nonzero: {full}"
+        );
     }
 }
