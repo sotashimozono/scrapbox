@@ -485,3 +485,137 @@ fn tpq_theta_2_matrix_free_emits_krylov_stats_in_json() {
     );
     std::fs::remove_file(&cfg).ok();
 }
+
+fn write_tpq_theta_2_mf_adaptive_config(
+    path: &std::path::Path,
+    tag: &str,
+    k_states: usize,
+    lanczos_tol: f64,
+    krylov_m: usize,
+) {
+    let body = format!(
+        r#"
+schema_version = "0.2"
+
+[meta]
+name = "tpq_theta_2_mf_adaptive_e2e_{tag}"
+description = "v0.13 gamma adaptive Lanczos for matrix-free theta_2"
+created = "2026-05-25"
+tags = ["v0.13", "tpq", "theta_2", "matrix_free", "adaptive"]
+
+[hamiltonian]
+model = "hubbard_1d_inhomogeneous"
+num_sites = 4
+hopping_j = 1.0
+on_site_interaction = 4.0
+spinful = true
+num_electrons_per_spin = 2
+beta = 2.0
+external_potential.kind = "explicit"
+external_potential.values = [0.0, 0.0, 0.0, 0.0]
+
+[xc_functional]
+kind = "non_interacting"
+
+[spectrum_source]
+kind = "dense_diag"
+
+[density_evaluator]
+kind = "pratt_recursion"
+
+[scf]
+max_iterations = 400
+tolerance = 1e-10
+mixing.kind = "linear"
+mixing.alpha = 1.0
+initial_density.kind = "uniform"
+
+[quench]
+kind = "sudden"
+final_external_potential.kind = "explicit"
+final_external_potential.values = [0.3, -0.3, 0.3, -0.3]
+
+[observables]
+
+[tpq]
+kind = "theta_2"
+source = "matrix_free"
+n_samples = 1
+seed = 0
+theta_2_k_states = {k_states}
+theta_2_lanczos_tol = {lanczos_tol}
+krylov_m = {krylov_m}
+
+[output]
+directory = "runs/tpq_theta_2_mf_adaptive_e2e_{tag}"
+format = "json"
+overwrite = true
+"#
+    );
+    std::fs::write(path, body).expect("write config");
+}
+
+#[test]
+fn tpq_theta_2_matrix_free_adaptive_stops_before_max_m() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg =
+        std::path::Path::new(manifest).join("configs/_test_tpq_theta_2_mf_adaptive_stops.toml");
+    write_tpq_theta_2_mf_adaptive_config(&cfg, "stops", 4, 1e-10, 60);
+    assert!(
+        invoke("tpq", &cfg).success(),
+        "adaptive theta_2 must succeed"
+    );
+    let path = std::path::Path::new(manifest)
+        .join("runs/tpq_theta_2_mf_adaptive_e2e_stops/tpq_report.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let stats = json
+        .get("krylov_stats")
+        .expect("adaptive run must emit krylov_stats");
+    let m_used = stats["min_m"].as_u64().expect("min_m");
+    assert!(m_used >= 4, "m_used {m_used} must be >= k_states");
+    assert!(
+        m_used < 60,
+        "m_used {m_used} should stop before krylov_m cap"
+    );
+    std::fs::remove_file(&cfg).ok();
+}
+
+#[test]
+fn tpq_theta_2_matrix_free_adaptive_self_consistent_across_tols() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+
+    let cfg_tight =
+        std::path::Path::new(manifest).join("configs/_test_tpq_theta_2_mf_adapt_xref_tight.toml");
+    write_tpq_theta_2_mf_adaptive_config(&cfg_tight, "xref_tight", 4, 1e-12, 36);
+    assert!(invoke("tpq", &cfg_tight).success());
+    let path_tight = std::path::Path::new(manifest)
+        .join("runs/tpq_theta_2_mf_adaptive_e2e_xref_tight/tpq_report.json");
+    let json_tight: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path_tight).unwrap()).unwrap();
+    let theta_tight = json_tight["theta_2"].as_f64().unwrap();
+    let m_tight = json_tight["krylov_stats"]["min_m"].as_u64().unwrap();
+
+    let cfg_loose =
+        std::path::Path::new(manifest).join("configs/_test_tpq_theta_2_mf_adapt_xref_loose.toml");
+    write_tpq_theta_2_mf_adaptive_config(&cfg_loose, "xref_loose", 4, 1.0e-6, 36);
+    assert!(invoke("tpq", &cfg_loose).success());
+    let path_loose = std::path::Path::new(manifest)
+        .join("runs/tpq_theta_2_mf_adaptive_e2e_xref_loose/tpq_report.json");
+    let json_loose: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path_loose).unwrap()).unwrap();
+    let theta_loose = json_loose["theta_2"].as_f64().unwrap();
+    let m_loose = json_loose["krylov_stats"]["min_m"].as_u64().unwrap();
+
+    assert!(
+        m_loose <= m_tight,
+        "looser tol must use smaller or equal m: {m_loose} vs {m_tight}"
+    );
+    assert!(
+        (theta_tight - theta_loose).abs() < 1e-4,
+        "adaptive Theta_2 tight={theta_tight} (m={m_tight}) vs loose={theta_loose} (m={m_loose}), delta = {}",
+        (theta_tight - theta_loose).abs()
+    );
+    std::fs::remove_file(&cfg_tight).ok();
+    std::fs::remove_file(&cfg_loose).ok();
+}

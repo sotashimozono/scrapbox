@@ -827,6 +827,16 @@ pub struct TpqSpec {
     /// default 16. Has no effect for other `kind` / `source` combinations.
     #[serde(default)]
     pub theta_2_k_states: Option<usize>,
+    /// Adaptive Lanczos Ritz residual tolerance for matrix-free
+    /// `Theta_2` (`kind = "theta_2"`, `source = "matrix_free"`). When
+    /// set, the Lanczos diagonalisation grows until the top
+    /// `theta_2_k_states` Ritz residuals are all below this tol,
+    /// capped at `krylov_m` (default 80). When `None`, fixed-`m`
+    /// Lanczos at `krylov_m` (or `k_states * 2`) is used (v0.10 beta
+    /// behaviour). Distinct from `[spectrum_source.lanczos].tol` which
+    /// controls the SCF-side Lanczos invariant-subspace termination.
+    #[serde(default)]
+    pub theta_2_lanczos_tol: Option<f64>,
     /// Optional beta sweep spec. When present, `scrapbox tpq`
     /// dispatches to the sweep path and emits `tpq_sweep_report.json`.
     /// v0.13 alpha only supports `kind = "density"`, `source =
