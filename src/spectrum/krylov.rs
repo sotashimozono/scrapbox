@@ -352,6 +352,266 @@ pub fn expm_apply_block<O: LinearOperator>(
     out
 }
 
+/// Block Lanczos exponentiation with a **shared** Krylov subspace.
+///
+/// Builds one shared block Krylov subspace
+/// `span{ M, A M, A^2 M, ..., A^{m-1} M }` from the RHS block
+/// `M = [psi_1 | ... | psi_N]` via block Lanczos with full block
+/// re-orthogonalisation, then evaluates `exp(scale * A) M` against the
+/// resulting block tridiagonal `T` of size `mN x mN`.
+///
+/// Contrast with [`expm_apply_block`] (v0.14 beta), which runs `N`
+/// independent length-`m` Lanczos chains sharing only matvec batching.
+/// The shared subspace here is strictly richer (contains the union of
+/// the per-RHS subspaces) at the cost of an `mN x mN` dense EVD per
+/// call. Choose this when RHSs are close in direction (e.g. nearby
+/// TPQ samples around the same beta), in which case the per-RHS spans
+/// overlap heavily and the shared chain captures the same accuracy
+/// with smaller `m`.
+///
+/// Returns one length-`op.dim()` vector per `psi_r`, in input order.
+///
+/// Storage convention: block columns are stored as `Vec<Vec<f64>>`
+/// with `q[r][i]` = (column `r`, row `i`), so each `q[r]` can be
+/// handed to `apply_batch` as `&[f64]`. Coefficient blocks `A_k`,
+/// `B_k`, `R` are faer `Mat<f64>` for arithmetic.
+#[allow(clippy::too_many_lines)]
+#[must_use]
+pub fn expm_apply_block_shared<O: LinearOperator>(
+    op: &O,
+    psis: &[&[f64]],
+    scale: f64,
+    m: usize,
+) -> Vec<Vec<f64>> {
+    let n = op.dim();
+    let n_rhs = psis.len();
+    if n_rhs == 0 {
+        return Vec::new();
+    }
+    for psi in psis {
+        assert_eq!(psi.len(), n, "psi.len() = {} != op.dim() = {n}", psi.len());
+    }
+    let m_cap = n.div_ceil(n_rhs).max(1);
+    let m = m.min(m_cap).max(1);
+
+    let mut q_curr: Vec<Vec<f64>> = psis.iter().map(|psi| psi.to_vec()).collect();
+    let r0 = block_qr(&mut q_curr, n_rhs, n);
+
+    let mut q_blocks: Vec<Vec<Vec<f64>>> = vec![q_curr.clone()];
+    let mut a_blocks: Vec<Mat<f64>> = Vec::with_capacity(m);
+    let mut b_blocks: Vec<Mat<f64>> = Vec::with_capacity(m);
+
+    let mut q_prev: Vec<Vec<f64>> = vec![vec![0.0_f64; n]; n_rhs];
+    let mut have_prev = false;
+    let mut ws: Vec<Vec<f64>> = vec![vec![0.0_f64; n]; n_rhs];
+
+    let mut actual_m = 0_usize;
+    for k in 0..m {
+        let q_refs: Vec<&[f64]> = q_curr.iter().map(Vec::as_slice).collect();
+        op.apply_batch(&q_refs, &mut ws);
+
+        if have_prev {
+            let b_prev = &b_blocks[k - 1];
+            for r in 0..n_rhs {
+                for i in 0..n {
+                    let mut acc = 0.0_f64;
+                    for sidx in 0..n_rhs {
+                        acc += q_prev[sidx][i] * b_prev[(r, sidx)];
+                    }
+                    ws[r][i] -= acc;
+                }
+            }
+        }
+
+        let mut a_k = Mat::<f64>::zeros(n_rhs, n_rhs);
+        for r in 0..n_rhs {
+            for sidx in 0..n_rhs {
+                let mut acc = 0.0_f64;
+                for i in 0..n {
+                    acc += q_curr[r][i] * ws[sidx][i];
+                }
+                a_k[(r, sidx)] = acc;
+            }
+        }
+        for r in 0..n_rhs {
+            for sidx in (r + 1)..n_rhs {
+                let avg = 0.5 * (a_k[(r, sidx)] + a_k[(sidx, r)]);
+                a_k[(r, sidx)] = avg;
+                a_k[(sidx, r)] = avg;
+            }
+        }
+
+        for sidx in 0..n_rhs {
+            for i in 0..n {
+                let mut acc = 0.0_f64;
+                for r in 0..n_rhs {
+                    acc += q_curr[r][i] * a_k[(r, sidx)];
+                }
+                ws[sidx][i] -= acc;
+            }
+        }
+
+        for _pass in 0..2 {
+            for q_block in &q_blocks {
+                let mut proj = vec![vec![0.0_f64; n_rhs]; n_rhs];
+                for r in 0..n_rhs {
+                    for sidx in 0..n_rhs {
+                        let mut acc = 0.0_f64;
+                        for i in 0..n {
+                            acc += q_block[r][i] * ws[sidx][i];
+                        }
+                        proj[r][sidx] = acc;
+                    }
+                }
+                for sidx in 0..n_rhs {
+                    for i in 0..n {
+                        let mut acc = 0.0_f64;
+                        for r in 0..n_rhs {
+                            acc += q_block[r][i] * proj[r][sidx];
+                        }
+                        ws[sidx][i] -= acc;
+                    }
+                }
+            }
+        }
+
+        a_blocks.push(a_k);
+        actual_m = k + 1;
+
+        if k + 1 == m {
+            break;
+        }
+
+        let b_next = block_qr(&mut ws, n_rhs, n);
+        let mut max_diag = 0.0_f64;
+        for r in 0..n_rhs {
+            max_diag = max_diag.max(b_next[(r, r)].abs());
+        }
+        if max_diag < 1e-14 {
+            break;
+        }
+        b_blocks.push(b_next);
+        for r in 0..n_rhs {
+            q_prev[r].clone_from(&q_curr[r]);
+            q_curr[r].clone_from(&ws[r]);
+        }
+        have_prev = true;
+        q_blocks.push(q_curr.clone());
+    }
+
+    let big = actual_m * n_rhs;
+    let mut t = Mat::<f64>::zeros(big, big);
+    for k in 0..actual_m {
+        let off = k * n_rhs;
+        for r in 0..n_rhs {
+            for sidx in 0..n_rhs {
+                t[(off + r, off + sidx)] = a_blocks[k][(r, sidx)];
+            }
+        }
+        if k + 1 < actual_m {
+            let off_next = (k + 1) * n_rhs;
+            let b_kp1 = &b_blocks[k];
+            for r in 0..n_rhs {
+                for sidx in 0..n_rhs {
+                    t[(off + r, off_next + sidx)] = b_kp1[(sidx, r)];
+                    t[(off_next + r, off + sidx)] = b_kp1[(r, sidx)];
+                }
+            }
+        }
+    }
+
+    let eigen = t
+        .self_adjoint_eigen(Side::Lower)
+        .expect("shared block Krylov tridiagonal EVD failed");
+    let evals = eigen.S().column_vector();
+    let u_t = eigen.U();
+
+    let mut c = Mat::<f64>::zeros(big, n_rhs);
+    for k in 0..big {
+        for r in 0..n_rhs {
+            let mut acc = 0.0_f64;
+            for sidx in 0..n_rhs {
+                acc += u_t[(sidx, k)] * r0[(sidx, r)];
+            }
+            c[(k, r)] = (scale * evals[k]).exp() * acc;
+        }
+    }
+    let mut y_m = Mat::<f64>::zeros(big, n_rhs);
+    for i in 0..big {
+        for r in 0..n_rhs {
+            let mut acc = 0.0_f64;
+            for k in 0..big {
+                acc += u_t[(i, k)] * c[(k, r)];
+            }
+            y_m[(i, r)] = acc;
+        }
+    }
+
+    let mut out: Vec<Vec<f64>> = vec![vec![0.0_f64; n]; n_rhs];
+    for r in 0..n_rhs {
+        for k in 0..actual_m {
+            let off = k * n_rhs;
+            for sidx in 0..n_rhs {
+                let coeff = y_m[(off + sidx, r)];
+                if coeff == 0.0 {
+                    continue;
+                }
+                let q_col = &q_blocks[k][sidx];
+                for j in 0..n {
+                    out[r][j] += coeff * q_col[j];
+                }
+            }
+        }
+    }
+    out
+}
+
+/// In-place block QR via classical Gram-Schmidt with one
+/// re-orthogonalisation pass. `cols[r][i]` = column `r`, row `i`.
+/// Returns the upper-triangular `R` (N x N) so that input = output * R.
+fn block_qr(cols: &mut [Vec<f64>], n_rhs: usize, n: usize) -> Mat<f64> {
+    let mut r_mat = Mat::<f64>::zeros(n_rhs, n_rhs);
+    for r in 0..n_rhs {
+        for sidx in 0..r {
+            let mut proj = 0.0_f64;
+            for i in 0..n {
+                proj += cols[r][i] * cols[sidx][i];
+            }
+            r_mat[(sidx, r)] = proj;
+            for i in 0..n {
+                cols[r][i] -= proj * cols[sidx][i];
+            }
+        }
+        for sidx in 0..r {
+            let mut proj = 0.0_f64;
+            for i in 0..n {
+                proj += cols[r][i] * cols[sidx][i];
+            }
+            r_mat[(sidx, r)] += proj;
+            for i in 0..n {
+                cols[r][i] -= proj * cols[sidx][i];
+            }
+        }
+        let mut norm_sq = 0.0_f64;
+        for i in 0..n {
+            norm_sq += cols[r][i] * cols[r][i];
+        }
+        let norm = norm_sq.sqrt();
+        r_mat[(r, r)] = norm;
+        if norm > 1e-10 {
+            let inv = 1.0 / norm;
+            for i in 0..n {
+                cols[r][i] *= inv;
+            }
+        } else {
+            for i in 0..n {
+                cols[r][i] = 0.0;
+            }
+        }
+    }
+    r_mat
+}
+
 /// Adaptive Krylov subspace exponentiation: same contract as
 /// [`expm_apply`] but selects the subspace size `m` on the fly using a
 /// posteriori error estimate (Saad 1992, eq 3.6):
@@ -866,6 +1126,111 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn expm_apply_block_shared_n1_matches_expm_apply() {
+        let triples = [
+            (0, 0, 2.0),
+            (1, 1, 3.0),
+            (2, 2, 4.0),
+            (3, 3, 5.0),
+            (4, 4, 6.0),
+            (0, 1, -1.0),
+            (1, 0, -1.0),
+            (1, 2, -1.0),
+            (2, 1, -1.0),
+            (2, 3, -1.0),
+            (3, 2, -1.0),
+            (3, 4, -1.0),
+            (4, 3, -1.0),
+        ];
+        let sparse = SparseMatrix::from_triples(5, &triples);
+        let psi = vec![0.3_f64, -0.2, 0.5, 0.1, -0.4];
+        let scale = -0.7;
+        let m = 4;
+
+        let want = expm_apply(&sparse, scale, &psi, m);
+        let got = expm_apply_block_shared(&sparse, &[&psi], scale, m);
+        assert_eq!(got.len(), 1);
+        for i in 0..5 {
+            assert!(
+                (got[0][i] - want[i]).abs() < 1e-12,
+                "shared block N=1 vs expm_apply at {i}: {} vs {}, delta = {}",
+                got[0][i],
+                want[i],
+                (got[0][i] - want[i]).abs()
+            );
+        }
+    }
+
+    #[test]
+    fn expm_apply_block_shared_n3_matches_dense_reference() {
+        // n = 10 well-conditioned diagonally dominant tridiagonal.
+        // Shared subspace dim = m*N = 12 covers n = 10 with mild
+        // over-determination; the Krylov approximation is essentially
+        // exact at this scale. Compare against dense exp(scale*H) M
+        // built via faer EVD.
+        let n = 10_usize;
+        let mut triples: Vec<(usize, usize, f64)> = Vec::new();
+        #[allow(clippy::cast_precision_loss)]
+        for i in 0..n {
+            triples.push((i, i, (i + 2) as f64));
+            if i + 1 < n {
+                triples.push((i, i + 1, -1.0));
+                triples.push((i + 1, i, -1.0));
+            }
+        }
+        let sparse = SparseMatrix::from_triples(n, &triples);
+        let mut h_dense = Mat::<f64>::zeros(n, n);
+        for &(i, j, v) in &triples {
+            h_dense[(i, j)] = v;
+        }
+        let scale = -0.3;
+        let eig = h_dense
+            .self_adjoint_eigen(Side::Lower)
+            .expect("dense reference EVD failed");
+        let evals = eig.S().column_vector();
+        let u = eig.U();
+        let mut expm = Mat::<f64>::zeros(n, n);
+        for i in 0..n {
+            for j in 0..n {
+                let mut acc = 0.0_f64;
+                for k in 0..n {
+                    acc += u[(i, k)] * (scale * evals[k]).exp() * u[(j, k)];
+                }
+                expm[(i, j)] = acc;
+            }
+        }
+        let mut psis = vec![vec![0.0_f64; n]; 3];
+        psis[0][0] = 1.0;
+        psis[1][n / 2] = 1.0;
+        psis[2][n - 1] = 1.0;
+        let psi_refs: Vec<&[f64]> = psis.iter().map(Vec::as_slice).collect();
+        let m = 4;
+        let shared = expm_apply_block_shared(&sparse, &psi_refs, scale, m);
+        for (r, psi) in psis.iter().enumerate() {
+            for i in 0..n {
+                let mut want = 0.0_f64;
+                for j in 0..n {
+                    want += expm[(i, j)] * psi[j];
+                }
+                assert!(
+                    (shared[r][i] - want).abs() < 1e-6,
+                    "shared block r={r} i={i}: {} vs dense {}, delta = {}",
+                    shared[r][i],
+                    want,
+                    (shared[r][i] - want).abs()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn expm_apply_block_shared_empty_returns_empty() {
+        let sparse = SparseMatrix::from_triples(5, &[(0, 0, 1.0)]);
+        let out = expm_apply_block_shared(&sparse, &[], -1.0, 3);
+        assert!(out.is_empty());
     }
 
     #[test]
