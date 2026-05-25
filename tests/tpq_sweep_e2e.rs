@@ -217,7 +217,6 @@ overwrite = true
     std::fs::remove_file(&cfg_sweep).ok();
 }
 
-
 fn write_sweep_config_full(
     path: &std::path::Path,
     tag: &str,
@@ -341,8 +340,8 @@ final_external_potential.values = [0.3, -0.3, 0.3, -0.3]
 ",
     );
     assert!(invoke(&cfg).success(), "work_statistics sweep must succeed");
-    let path = std::path::Path::new(manifest)
-        .join("runs/tpq_sweep_e2e_work_beta/tpq_sweep_report.json");
+    let path =
+        std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_work_beta/tpq_sweep_report.json");
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(json["kind"], "work_statistics");
@@ -352,11 +351,11 @@ final_external_potential.values = [0.3, -0.3, 0.3, -0.3]
     for row in rows {
         assert!(row["beta"].as_f64().is_some(), "beta present");
         assert!(row["mean_w"].as_f64().is_some(), "mean_w present");
-        assert!(row["work_variance"].as_f64().unwrap() >= 0.0, "variance >= 0");
         assert!(
-            row["mean_w_stderr"].as_f64().unwrap() >= 0.0,
-            "stderr >= 0"
+            row["work_variance"].as_f64().unwrap() >= 0.0,
+            "variance >= 0"
         );
+        assert!(row["mean_w_stderr"].as_f64().unwrap() >= 0.0, "stderr >= 0");
     }
     std::fs::remove_file(&cfg).ok();
 }
@@ -375,8 +374,7 @@ fn tpq_sweep_krylov_tol_density_matrix_free_per_row_krylov_stats() {
         "",
     );
     assert!(invoke(&cfg).success(), "krylov_tol sweep must succeed");
-    let path =
-        std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_kt/tpq_sweep_report.json");
+    let path = std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_kt/tpq_sweep_report.json");
     let json: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(json["kind"], "density_krylov_tol");
@@ -390,5 +388,47 @@ fn tpq_sweep_krylov_tol_density_matrix_free_per_row_krylov_stats() {
         m_tight >= m_mid && m_mid >= m_loose,
         "tighter tol should use >= m: tight={m_tight}, mid={m_mid}, loose={m_loose}"
     );
+    std::fs::remove_file(&cfg).ok();
+}
+
+#[test]
+fn tpq_sweep_seed_density_matrix_free_emits_ensemble_summary() {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let cfg = std::path::Path::new(manifest).join("configs/_test_tpq_sweep_seed.toml");
+    write_sweep_config_full(
+        &cfg,
+        "seed_ens",
+        "density",
+        "matrix_free",
+        "seed",
+        "[7, 19, 42, 101]",
+        "",
+    );
+    assert!(invoke(&cfg).success(), "seed sweep CLI must succeed");
+    let path =
+        std::path::Path::new(manifest).join("runs/tpq_sweep_e2e_seed_ens/tpq_sweep_report.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(json["kind"], "density_seed_sweep");
+    assert_eq!(json["axis"], "seed");
+    let rows = json["rows"].as_array().expect("rows");
+    assert_eq!(rows.len(), 4);
+    let seeds: Vec<u64> = rows.iter().map(|r| r["seed"].as_u64().unwrap()).collect();
+    assert_eq!(seeds, vec![7, 19, 42, 101]);
+    let summary = json["ensemble_summary"]
+        .as_object()
+        .expect("ensemble_summary");
+    let mean = summary["mean_density"].as_array().expect("mean_density");
+    let stderr = summary["stderr_density"]
+        .as_array()
+        .expect("stderr_density");
+    assert_eq!(mean.len(), 4, "L = 4 sites");
+    assert_eq!(stderr.len(), 4);
+    let total: f64 = mean.iter().map(|v| v.as_f64().unwrap()).sum();
+    assert!((total - 4.0).abs() < 1e-6, "mean density sums to N = 4");
+    for v in stderr {
+        let s = v.as_f64().unwrap();
+        assert!(s > 0.0, "stderr must be > 0 across seeds, got {s}");
+    }
     std::fs::remove_file(&cfg).ok();
 }

@@ -111,6 +111,25 @@ pub struct TpqSweepBetaWorkRow {
     pub mean_w_stderr: f64,
 }
 
+/// One row of a seed-sweep density result (v0.14 delta).
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqSweepSeedRow {
+    /// RNG seed this row was evaluated at.
+    pub seed: u64,
+    /// Per-site canonical thermal density at this seed.
+    pub density: Vec<f64>,
+}
+
+/// Per-site mean and standard error of TPQ observables across the
+/// seed-sweep ensemble (v0.14 delta).
+#[derive(Debug, Clone, Serialize)]
+pub struct TpqEnsembleSummary {
+    /// Per-site mean density across all seeds.
+    pub mean_density: Vec<f64>,
+    /// Per-site standard error of the mean across seeds.
+    pub stderr_density: Vec<f64>,
+}
+
 /// Output payload emitted by `scrapbox tpq` when `[tpq.sweep]` is set.
 /// Written to `tpq_sweep_report.json` instead of `tpq_report.json`.
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +164,17 @@ pub enum TpqSweepRunOutput {
         seed: u64,
         axis: &'static str,
         rows: Vec<TpqSweepBetaWorkRow>,
+        wall_time_ms: u128,
+        krylov_stats: KrylovStatsJson,
+    },
+    /// Seed-sweep density rows + ensemble summary (v0.14 delta).
+    DensitySeedSweep {
+        source: &'static str,
+        dim: usize,
+        n_samples: usize,
+        axis: &'static str,
+        rows: Vec<TpqSweepSeedRow>,
+        ensemble_summary: TpqEnsembleSummary,
         wall_time_ms: u128,
         krylov_stats: KrylovStatsJson,
     },
@@ -513,10 +543,13 @@ pub fn run_sweep(cfg: &Config) -> Result<TpqSweepRunOutput> {
         (crate::config::TpqSweepAxis::KrylovTol, TpqKind::Density, TpqSource::MatrixFree) => {
             run_sweep_krylov_tol_density_mf(cfg, tpq_cfg, sweep_cfg)
         }
+        (crate::config::TpqSweepAxis::Seed, TpqKind::Density, TpqSource::MatrixFree) => {
+            run_sweep_seed_density_mf(cfg, tpq_cfg, sweep_cfg)
+        }
         (axis, kind, source) => {
             return Err(ScrapboxError::ConfigValidation {
                 message: format!(
-                    "[tpq.sweep] unsupported combination (axis = {axis:?},                      kind = {kind:?}, source = {source:?}); v0.14 gamma supports                      (beta, density, matrix_free), (beta, density, ed),                      (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free)"
+                    "[tpq.sweep] unsupported combination (axis = {axis:?},                      kind = {kind:?}, source = {source:?}); v0.14 gamma supports                      (beta, density, matrix_free), (beta, density, ed),                      (beta, work_statistics, matrix_free), (krylov_tol, density, matrix_free), (seed, density, matrix_free)"
                 ),
             });
         }
@@ -734,6 +767,88 @@ fn run_sweep_krylov_tol_density_mf(
         axis: "krylov_tol",
         rows: rows_payload,
         wall_time_ms: elapsed,
+    }
+}
+
+fn run_sweep_seed_density_mf(
+    cfg: &Config,
+    tpq_cfg: &TpqSpec,
+    sweep_cfg: &crate::config::TpqSweep,
+) -> TpqSweepRunOutput {
+    use crate::spectrum::linear_operator::LinearOperator;
+    let v_ext = cfg
+        .hamiltonian
+        .external_potential
+        .to_site_values(cfg.hamiltonian.num_sites);
+    let n_up = cfg.hamiltonian.num_electrons_per_spin;
+    let n_dn = cfg.hamiltonian.num_electrons_per_spin;
+    let jw = JwHubbard::new(
+        cfg.hamiltonian.num_sites,
+        n_up,
+        n_dn,
+        cfg.hamiltonian.hopping_j,
+        cfg.hamiltonian.on_site_interaction,
+        &v_ext,
+    );
+    let dim = jw.dim();
+    let beta = tpq_cfg.beta.unwrap_or(cfg.hamiltonian.beta);
+    let spec = krylov_spec_from(tpq_cfg);
+    let num_sites = cfg.hamiltonian.num_sites;
+    let start = Instant::now();
+    let mut rows_payload: Vec<TpqSweepSeedRow> = Vec::with_capacity(sweep_cfg.values.len());
+    let mut m_log: Vec<usize> = Vec::new();
+    for &seed_f in &sweep_cfg.values {
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let seed = seed_f as u64;
+        let (density, krylov_stats) =
+            tpq::tpq_density_matrix_free(&jw, beta, tpq_cfg.n_samples, seed, spec);
+        m_log.push(krylov_stats.min_m);
+        m_log.push(krylov_stats.max_m);
+        rows_payload.push(TpqSweepSeedRow { seed, density });
+    }
+    let elapsed = start.elapsed().as_millis();
+    let agg_stats = KrylovStats::from_samples(&m_log);
+
+    let n_seeds = rows_payload.len();
+    let mut mean_density = vec![0.0_f64; num_sites];
+    for row in &rows_payload {
+        for (i, &x) in row.density.iter().enumerate() {
+            mean_density[i] += x;
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n_f = n_seeds as f64;
+    for x in &mut mean_density {
+        *x /= n_f;
+    }
+    let mut variance = vec![0.0_f64; num_sites];
+    for row in &rows_payload {
+        for (i, &x) in row.density.iter().enumerate() {
+            let d = x - mean_density[i];
+            variance[i] += d * d;
+        }
+    }
+    let denom = if n_seeds > 1 {
+        #[allow(clippy::cast_precision_loss)]
+        let nm1 = (n_seeds - 1) as f64;
+        nm1 * n_f
+    } else {
+        1.0
+    };
+    let stderr_density: Vec<f64> = variance.iter().map(|v| (v / denom).sqrt()).collect();
+
+    TpqSweepRunOutput::DensitySeedSweep {
+        source: "matrix_free",
+        dim,
+        n_samples: tpq_cfg.n_samples,
+        axis: "seed",
+        rows: rows_payload,
+        ensemble_summary: TpqEnsembleSummary {
+            mean_density,
+            stderr_density,
+        },
+        wall_time_ms: elapsed,
+        krylov_stats: KrylovStatsJson::from(agg_stats),
     }
 }
 
