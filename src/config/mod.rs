@@ -251,6 +251,16 @@ pub enum XcFunctional {
         #[serde(default)]
         params: BaldaParams,
     },
+    /// BALDA finite-T dispatch shim (v0.13 beta): wraps T=0 BALDA and
+    /// scales by a temperature ramp `w(beta * U) = x^2 / (1 + x^2)`.
+    /// Recovers T=0 BALDA at `beta -> infinity` and non-interacting at
+    /// `beta -> 0`. NOT a derived thermal BALDA; placeholder for the
+    /// dispatch surface — see MILESTONE-v13 deferred items.
+    BaldaFiniteT {
+        /// Numerical parameters (shared with the T=0 BALDA route).
+        #[serde(default)]
+        params: BaldaParams,
+    },
     /// Set `λ^{h-xc} = 0` everywhere.
     NonInteracting,
 }
