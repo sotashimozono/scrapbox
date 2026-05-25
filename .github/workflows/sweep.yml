@@ -1,0 +1,102 @@
+name: sweep
+
+# v0.15 zeta closure: turns the existing GitHub-hosted runners into a
+# research-compute backbone for parameter-sweep experiments. Builds
+# scrapbox once in release mode, iterates over every config in
+# configs/sweeps/, and uploads the generated tpq_sweep_report.json
+# files (plus the runs/ directory) as a single workflow artifact.
+#
+# Triggered on push to main (auto-archive a snapshot of sweep outputs
+# at every merge) and on workflow_dispatch (manual ad-hoc runs).
+# Intentionally NOT wired to pull_request -- sweep wall time on free
+# runners is unpredictable and we don't want it gating PR latency.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'configs/sweeps/**'
+      - 'src/**'
+      - '.github/workflows/sweep.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sweep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sweep:
+    name: run configs/sweeps/*
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8  # stable
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4  # v2.9.1
+        with:
+          cache-bin: false
+
+      - name: build scrapbox (release)
+        run: cargo build --release --bin scrapbox
+
+      - name: run every configs/sweeps/*.toml
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p sweep_artifacts
+          summary="sweep_artifacts/SWEEP_SUMMARY.md"
+          {
+            echo "# Sweep workflow summary"
+            echo
+            echo "Commit: \`${GITHUB_SHA}\`"
+            echo "Run: ${GITHUB_RUN_ID} (attempt ${GITHUB_RUN_ATTEMPT})"
+            echo
+            echo "| config | exit | wall_time_ms | report_kind | report_bytes |"
+            echo "|---|---|---|---|---|"
+          } > "$summary"
+          for cfg in configs/sweeps/*.toml; do
+            name="$(basename "$cfg" .toml)"
+            echo "==> running $cfg"
+            t0=$(date +%s%3N)
+            if ./target/release/scrapbox tpq "$cfg" >"sweep_artifacts/${name}.stdout" 2>"sweep_artifacts/${name}.stderr"; then
+              exit_code=0
+            else
+              exit_code=$?
+            fi
+            t1=$(date +%s%3N)
+            wall_ms=$((t1 - t0))
+            # Each scrapbox tpq run writes either runs/<meta.name>/tpq_report.json
+            # (single-point config) or runs/<meta.name>/tpq_sweep_report.json
+            # (config carrying [tpq.sweep]). Capture whichever appeared.
+            report_kind=""
+            bytes=0
+            for candidate in tpq_sweep_report.json tpq_report.json; do
+              found=$(find runs -name "$candidate" -newer "$cfg" 2>/dev/null | head -1 || true)
+              if [ -n "$found" ]; then
+                cp "$found" "sweep_artifacts/${name}.${candidate}"
+                bytes=$(stat -c %s "$found")
+                report_kind=$candidate
+                break
+              fi
+            done
+            echo "| \`$name\` | $exit_code | $wall_ms | ${report_kind:-none} | $bytes |" >> "$summary"
+          done
+          cat "$summary"
+
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882  # v4.4.3
+        if: always()
+        with:
+          name: sweep-reports-${{ github.run_id }}
+          path: sweep_artifacts/
+          retention-days: 30
+          if-no-files-found: error
