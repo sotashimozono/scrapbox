@@ -21,7 +21,7 @@ rayon = "1.10"
 
 # Random number generation — Haar sampling for the future TPQ engine
 # (see notes/Zettelkasten/PermanentNote/tpq-state-canonical.md).
-rand = "0.8"
+rand = "0.9"
 
 # Configuration / serialization — drives the entire harness
 # (see discipline/CONFIG.md and discipline/HARNESS.md).
